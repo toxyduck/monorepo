@@ -1,5 +1,5 @@
 <!-- demo-video:start -->
-[![Plugin demo](assets/demo.gif)](assets/demo.mp4)
+[![Plugin demo](https://raw.githubusercontent.com/toxyduck/monorepo/main/packages/search-everywhere/assets/demo.gif)](https://github.com/toxyduck/monorepo/blob/main/packages/search-everywhere/assets/demo.mp4)
 <!-- demo-video:end -->
 
 ## Install
