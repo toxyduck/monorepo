@@ -130,7 +130,10 @@ def theme_color(data, key):
     section, field = key.split('.')
     value = data[section][field]
     if isinstance(value, list): return ''.join(f'{v:02x}' for v in value)
-    names = {'Yellow':'brown','Blue':'blue','Cyan':'cyan','White':'white','Black':'black','DarkGray':'brightblack','Gray':'white','Red':'red','Green':'green','Magenta':'magenta','Default':'default'}
+    # Fresh 0.5.2 theme roles: White emits indexed 15, Gray indexed 7.
+    # Native raw-widget probe confirms both with bold on/off; bold changes
+    # weight, not this color. Keep the ANSI decoder's SGR 37 palette intact.
+    names = {'Yellow':'brown','Blue':'blue','Cyan':'cyan','White':'brightwhite','Black':'black','DarkGray':'brightblack','Gray':'white','Red':'red','Green':'green','Magenta':'magenta','Default':'default'}
     resolved=names.get(value,value.lower())
     return COLORS.get(resolved,resolved)
 
@@ -150,8 +153,13 @@ def cell_proof(screen, name, theme):
     if not hits or not all(c['bold'] for c in hits): raise ValueError('Theme match background/bold absent')
     if not any(c['col'] > 35 for c in hits) or not any(c['col'] < 35 for c in hits):
         raise ValueError('Native and snippet matches required')
-    titles = ['Bar.kt:1','Foo.kt:1'] if is_regex else ['Foo.kt:1','build/Foo.kt:1:1']
+    # Narrow production rows show basename:line; directory context is omitted.
+    titles = ['Bar.kt:1','Foo.kt:1'] if is_regex else ['Foo.kt:1','generated']
     if not all(title in text for title in titles): raise ValueError('Basename:line evidence absent')
+    if not is_regex:
+        rows=[row[:35] for row in screen.display if row.startswith(('>  ','   '))]
+        if len(rows)!=3 or not all('Foo.kt:1' in row for row in rows):
+            raise ValueError('Three actual completed picker identities required')
     if is_regex and 'Bar.kt (preview)' not in text: raise ValueError('Native preview tab absent')
     return dict(phase=name, hits=hits, native_cells=[dict(text=c.data,fg=c.fg,bg=c.bg,bold=c.bold) for c in cells])
 
@@ -160,7 +168,7 @@ def pulse_cells(screen):
     from wcwidth import wcswidth
     matches=[]
     for y,row in enumerate(screen.display):
-        found=re.search(r'Results · ([•·]{3}) Searching',row)
+        found=re.search(r'Results · \d+ · Searching ([•·]{3})',row)
         if found: matches.append((y,found.start(1),found.group(1)))
     if not matches: return None
     if len(matches)!=1: raise ValueError('Single Results pulse required')
@@ -226,6 +234,52 @@ def encoded_motion(base, ffmpeg, samples):
     return proofs
 
 
+def encoded_stability(base, ffmpeg, samples):
+    """Compare fixed-theme native pending frames with both final decoded assets."""
+    from PIL import Image, ImageChops, ImageStat, ImageDraw
+    groups=[]
+    for sample in samples:
+        if not groups or sample['source_frame_index']!=groups[-1][-1]['source_frame_index']+1 or sample['outside_pulse_sha256']!=groups[-1][-1]['outside_pulse_sha256']:
+            groups.append([])
+        groups[-1].append(sample)
+    stable=max(groups,key=len,default=[])
+    if not stable or (stable[-1]['source_frame_index']-stable[0]['source_frame_index'])/FPS<1.5:
+        raise ValueError('First-search native pending scene needs 1.5 seconds stable outside pulse')
+    result={'native_stable_seconds':(stable[-1]['source_frame_index']-stable[0]['source_frame_index'])/FPS,
+            'native_stable_frames':[s['source_frame_index'] for s in stable], 'gif':[], 'mp4':[]}
+    def difference(a,b,crop):
+        delta=ImageChops.difference(a,b)
+        # Lanczos/H264 can affect pixels surrounding the three pulse cells.
+        x,y,r,bottom=crop;ImageDraw.Draw(delta).rectangle((max(0,x-4),max(0,y-4),r+4,bottom+4),fill=(0,0,0))
+        return dict(mean_channel_delta=sum(ImageStat.Stat(delta).mean)/3,
+                    max_channel_delta=max(v[1] for v in delta.getextrema()),
+                    changed_pixels=sum(pixel!=(0,0,0) for pixel in delta.getdata()))
+    with tempfile.TemporaryDirectory(prefix='decoded-stability-',dir=base) as temp:
+        invoke([ffmpeg,'-v','error','-i',str(base/'demo.mp4'),str(Path(temp)/'%04d.png')])
+        previous=None
+        for s in stable:
+            n=s['source_frame_index'];image=Image.open(Path(temp)/f'{n+1:04d}.png').convert('RGB')
+            if previous is not None:
+                proof=difference(previous,image,s['crop']);result['mp4'].append(dict(frame=n,**proof))
+                if proof['mean_channel_delta']>.05 or proof['max_channel_delta']>64:
+                    raise ValueError('MP4 stable pending scene exceeds codec-noise bounds: '+str(proof))
+            previous=image
+    with Image.open(base/'demo.gif') as gif:
+        elapsed=0;previous=None;indices={s['source_frame_index']:s for s in stable}
+        for n in range(gif.n_frames):
+            gif.seek(n);index=round(elapsed*FPS);sample=indices.get(index)
+            if sample:
+                image=gif.convert('RGB');crop=[round(v*gif.width/1430) if i%2==0 else round(v*gif.height/864) for i,v in enumerate(sample['crop'])]
+                if previous is not None:
+                    proof=difference(previous,image,crop);result['gif'].append(dict(frame=n,source_frame=index,**proof))
+                    if proof['changed_pixels']:
+                        raise ValueError('GIF fixed pending scene changes outside pulse: '+str(proof))
+                previous=image
+            elapsed+=gif.info.get('duration',0)/1000
+    if not result['gif'] or not result['mp4']:raise ValueError('Encoded stability evidence absent')
+    return result
+
+
 def invoke(command, timeout=60):
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
     if result.returncode:
@@ -251,10 +305,11 @@ def verify_gif(path, duration):
                     bytes=path.stat().st_size, sha256=sha(path), full_decode='PASS')
 
 
-def make_gif(base, ffmpeg, duration):
+def make_gif(base, ffmpeg, duration, frames):
     target = base/'demo.gif'
     filters = f'fps={FPS},scale={GIF_WIDTH}:-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle'
-    invoke([ffmpeg,'-hide_banner','-loglevel','error','-y','-i',str(base/'demo.mp4'),
+    # Use the same lossless PTY replay frames, not H264 quantization noise.
+    invoke([ffmpeg,'-hide_banner','-loglevel','error','-y','-framerate',str(FPS),'-i',str(frames/'%04d.png'),
             '-filter_complex',filters,'-loop','0','-threads','2',str(target)])
     return verify_gif(target,duration)
 
@@ -292,7 +347,7 @@ def make(base, source, source_files):
                     renderer.image(screen).save(base/('demo-foo-proof.png' if event['name'].startswith('native bind') else 'demo-regex-proof.png'))
                 if event['type']=='phase' and event['name'].startswith('theme-'):
                     _,state,name=event['name'].split('-',2);meta=theme_rows[state,name]['data']
-                    title=next(((y,row.index('SEARCH EVERYWHERE')) for y,row in enumerate(screen.display) if 'SEARCH EVERYWHERE' in row),None)
+                    title=next(((y,row.index('Results · ')) for y,row in enumerate(screen.display) if 'Results · ' in row),None)
                     if title is None: raise ValueError('Native theme widget absent')
                     y,x=title;actual=screen.buffer[y][x].fg;expected=theme_color(meta,'ui.help_key_fg')
                     if actual!=expected: raise ValueError(f'Idle/pending widget theme mismatch: {name} {actual} != {expected}')
@@ -301,10 +356,10 @@ def make(base, source, source_files):
                     native_fg=theme_color(meta,'syntax.type')
                     if any(screen.buffer[y][x].fg!=native_fg for y,x in native_hits): raise ValueError('Native query overlay replaced syntax foreground')
                     selected=next(((y,row.index('> ')) for y,row in enumerate(screen.display) if '> ' in row and 'Foo.kt:1' in row),None)
-                    if selected is None: raise ValueError('Selected card theme evidence absent')
+                    if selected is None: raise ValueError('Selected row theme evidence absent')
                     sy,sx=selected;selected_cell=screen.buffer[sy][sx]
                     if selected_cell.fg!=theme_color(meta,'ui.popup_selection_fg') or selected_cell.bg!=theme_color(meta,'ui.popup_selection_bg'):
-                        raise ValueError('Selected card theme foreground/background mismatch')
+                        raise ValueError('Selected row theme foreground/background mismatch')
                     foreign=[(y,x) for y,row in screen.buffer.items() for x,c in row.items() if c.bg=='c800b4']
                     if not foreign: raise ValueError('Foreign overlay lost on theme change')
                     pulse=pulse_cells(screen)
@@ -314,7 +369,12 @@ def make(base, source, source_files):
                     spinner.append(spinner_proof(screen, renderer, base, event['name']))
                 index += 1
             pulse=pulse_cells(screen)
-            if pulse: samples.append(dict(pulse,source_frame_index=number,recording_time=timestamp))
+            if pulse:
+                y,x=pulse['position']
+                stable_cells=[(yy,xx,c.data,c.fg,c.bg,c.bold,c.reverse,c.underscore) for yy in range(screen.lines) for xx in range(screen.columns)
+                              if not (yy==y and x<=xx<x+3) for c in [screen.buffer[yy][xx]]]
+                samples.append(dict(pulse,source_frame_index=number,recording_time=timestamp,
+                    outside_pulse_sha256=hashlib.sha256(json.dumps(stable_cells).encode()).hexdigest()))
             image = renderer.image(screen)
             image.save(Path(temp) / f'{number:04d}.png')
         # PNG is a lossless proof from the same terminal replay, not ui.json.
@@ -324,6 +384,8 @@ def make(base, source, source_files):
         if len(proofs) != 2: raise ValueError('Required demo phases not replayed')
         target = base / 'demo.mp4'
         invoke([renderer.ffmpeg, '-hide_banner','-loglevel','error','-y','-framerate',str(FPS),'-i',str(Path(temp)/'%04d.png'),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart','-threads','2',str(target)])
+        gif = make_gif(base, renderer.ffmpeg, len(times)/FPS, Path(temp))
+        stability=encoded_stability(base,renderer.ffmpeg,[s for s in samples if clips[0]['start']<=s['recording_time']<=clips[0]['end']])
     if not 0 < target.stat().st_size <= MAX_MP4: raise ValueError('MP4 size cap exceeded')
     # Full bounded decode and observed metadata; no dependency on ffprobe.
     decoded = invoke([renderer.ffmpeg,'-hide_banner','-i',str(target),'-progress','pipe:1','-f','null','-'])
@@ -334,9 +396,8 @@ def make(base, source, source_files):
     decoded_times = re.findall(r'^out_time_us=(\d+)$', progress, re.M)
     if not decoded_times or abs(int(decoded_times[-1])/1_000_000 - len(times)/FPS) > 1/FPS:
         raise ValueError('Decoded duration mismatch')
-    gif = make_gif(base, renderer.ffmpeg, len(times)/FPS)
     motion=encoded_motion(base,renderer.ffmpeg,samples)
-    manifest = dict(encoded_motion=motion, theme_evidence=theme_proofs, theme=theme, gif=gif, gif_sha256=gif['sha256'], mp4_bytes=target.stat().st_size,
+    manifest = dict(encoded_motion=motion, encoded_stability=stability, theme_evidence=theme_proofs, theme=theme, gif=gif, gif_sha256=gif['sha256'], mp4_bytes=target.stat().st_size,
                     phase_pngs={name: sha(base/name) for name in ('demo-foo-proof.png','demo-regex-proof.png')},
                     decoded_duration=int(decoded_times[-1])/1_000_000, ansi_sha256=sha(base/'terminal.ansi'), recording_sha256=sha(base/'recording.jsonl'),
                     mp4_sha256=sha(target), png_sha256=sha(base/'demo-proof.png'), frames=len(times), fps=FPS,

@@ -3,7 +3,9 @@
 export const BRAND_PALETTE = {
   accent: "ui.help_key_fg",
   text: "ui.popup_text_fg",
-  secondary: "ui.popup_text_fg",
+  secondary: "editor.line_number_fg",
+  symbol: "syntax.function",
+  icon: "syntax.type",
   demoted: "editor.line_number_fg",
   selectedBg: "ui.popup_selection_bg",
   selectedFg: "ui.popup_selection_fg",

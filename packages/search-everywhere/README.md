@@ -4,7 +4,7 @@
 
 ## Download
 
-Authenticate GitHub CLI with an account that has access to this private repository.
+Authenticate GitHub CLI before cloning.
 
 ```sh
 gh repo clone toxyduck/monorepo

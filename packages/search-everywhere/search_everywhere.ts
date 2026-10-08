@@ -120,7 +120,7 @@ function draw(s: Session): void {
   if (!valid(s)) { if (session === s) close(); return; }
   syncLoading(s);
   const notice = [...providers.values()].some(p => p.kind === "files") ? "" : "file provider not configured";
-  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame));
+  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame, editor.dockCols()));
 }
 function invalidate(s: Session): void {
   stopLoading(s);
@@ -329,7 +329,7 @@ function open(): void {
     loadingTimer: null, loadingGeneration: 0, loadingFrame: 0, loadingNextAt: 0,
     jobs: new Set(), decorated: new Set(), namespace: "search-everywhere:" + Date.now() + ":" + windowId + ":" + ++namespaceId};
   session = s;
-  s.mounted = editor.mountFloatingWidget(PANEL, spec(s.state, config.demotePaths, [], "file provider not configured", s.root, height()),
+  s.mounted = editor.mountFloatingWidget(PANEL, spec(s.state, config.demotePaths, [], "file provider not configured", s.root, height(), 0, editor.dockCols()),
     38, 100, true, false, "Search Everywhere", true, false, MODE);
   if (!s.mounted) { close(); return; }
   timer = editor.setInterval(100, "search_everywhere_tick"); draw(s);

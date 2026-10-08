@@ -9,6 +9,10 @@ base = pathlib.Path(tempfile.mkdtemp(prefix='fresh-search-smoke-'))
 root = base/'fixture'; root.mkdir(); (root/'build').mkdir()
 (root/'Foo.kt').write_text('class Foo { fun findUser() = "needle" }\n')
 (root/'Bar.kt').write_text('class Bar { val needle = 1 }\n')
+# The saved symbol must match the provider identity; production verifies it.
+(root/'界𐐀Long.kt').write_text('class 界𐐀'+'Long'*24+' { val needle = 1 }\n')
+# Distinct result keys are paths, not provider display names.
+for i in range(20): (root/f'Foo{i}.kt').write_text(f'class Foo{i} {{}}\n')
 (root/'Slow.py').write_text('pass\n')
 (root/'Error.json').write_text('{}\n')
 (root/'build'/'Foo.kt').write_text('class Foo { val needle = 2 }\n')
@@ -31,7 +35,7 @@ for name in production_files:
     content=(source/name).read_text()
     if name=='search_everywhere.ts':
         # Only context getters are controlled: namespaces/buffers/flush remain actual native APIs.
-        content=instrument(content, 'const editor = getEditor();', 'const editor = getEditor(); const nativeWindow=editor.activeWindow.bind(editor), nativeAuthority=editor.getAuthorityLabel.bind(editor); let testContext="same"; editor.activeWindow=()=>testContext==="window"?nativeWindow()+10000:nativeWindow(); editor.getAuthorityLabel=()=>testContext==="authority"?"fixture-other-authority":nativeAuthority();')
+        content=instrument(content, 'const editor = getEditor();', 'const editor = getEditor(); const nativeUpdateOutcomes=[]; const nativeWindow=editor.activeWindow.bind(editor), nativeAuthority=editor.getAuthorityLabel.bind(editor); let testContext="same"; editor.activeWindow=()=>testContext==="window"?nativeWindow()+10000:nativeWindow(); editor.getAuthorityLabel=()=>testContext==="authority"?"fixture-other-authority":nativeAuthority();')
         content += '\nfor (const mode of ["window","authority","same"]) { const h="smoke_context_"+mode; registerHandler(h,()=>{testContext=mode;}); editor.registerCommand("Smoke Context "+mode,"",h); }\nregisterHandler("smoke_cleanup_state",()=>editor.replaceFile(editor.localPath('+json.dumps(str(base/'cleanup.json'))+'),JSON.stringify({session:session!==null,pending:pendingDecorations.size,timer:cleanupTimer}))); editor.registerCommand("Smoke Cleanup State","","smoke_cleanup_state");\n'
         # Controlled scheduler interleaving in the disposable copy, not native API stubs.
         marker=json.dumps(str(base/'close-after-dispatch'))
@@ -43,8 +47,8 @@ for name in production_files:
             '    editor.replaceFile(editor.localPath('+json.dumps(str(base/'refusal.json'))+'),JSON.stringify({status:"Search Everywhere needs a free dock; existing panel preserved"})); editor.setStatus("Search Everywhere needs a free dock; existing panel preserved"); return;')
         content=instrument(content, 'registerHandler("search_everywhere_close", () => close());', 'registerHandler("search_everywhere_close", () => close()); editor.registerCommand("Smoke No Session Close","","search_everywhere_close");')
         # Observation only in the disposable copy: same native methods/controller, no mocked routes.
-        content=instrument(content, '  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame));',
-            '  const tree=spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame); editor.replaceFile(editor.localPath('+json.dumps(str(base/'ui.json'))+'),JSON.stringify({state:s.state,tree})); editor.updateFloatingWidget(PANEL,tree);')
+        content=instrument(content, '  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame, editor.dockCols()));',
+            '  const tree=spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame, editor.dockCols()); editor.replaceFile(editor.localPath('+json.dumps(str(base/'ui.json'))+'),JSON.stringify({state:s.state,tree,dockCols:editor.dockCols()})); const outcome=editor.updateFloatingWidget(PANEL,tree); editor.replaceFile(editor.localPath('+json.dumps(str(base/'update-outcome.json'))+'),JSON.stringify({outcome,outcomes:[...nativeUpdateOutcomes,outcome]})); nativeUpdateOutcomes.push(outcome);')
         content=instrument(content, '  const s = session;\n  if (!s || ev.panel_id',
             '  editor.replaceFile(editor.localPath('+json.dumps(str(base/'last-widget.json'))+'),JSON.stringify(ev)); const s = session;\n  if (!s || ev.panel_id')
         content=instrument(content, '  const line = text.replace', '  editor.replaceFile(editor.localPath('+json.dumps(str(base/'decoration.json'))+'),JSON.stringify({start,end,text,snippet:r.snippet,safe:safe()})); const line = text.replace')
@@ -79,7 +83,8 @@ api.registerProvider({name:"fixture-files",kind:"files",async search(q,ctx){reco
 if(q==="slow") await editor.delay(700);
 if(q==="readerror")return [{kind:"file",path:ctx.root+"/Missing.kt",name:"Missing"}];
 if(q==="long")return [{kind:"symbol",path:ctx.root+"/Long.kt",name:"Foo",line:71,col:7}];
-if(q==="manyfoo")return Array.from({length:20},(_,i)=>({kind:"file",path:ctx.root+"/Foo.kt",name:"Foo"+i}));
+if(q==="manyfoo")return Array.from({length:20},(_,i)=>({kind:"file",path:ctx.root+"/Foo"+i+".kt",name:"Foo"+i}));
+if(q==="界")return [{kind:"symbol",path:ctx.root+"/界𐐀Long.kt",name:"界𐐀"+"Long".repeat(24),line:1,col:7}];
 if(!q.toLowerCase().includes("foo"))return [];
 return [{kind:"file",path:ctx.root+"/Foo.kt",name:"Foo"},{kind:"file",path:ctx.root+"/build/Foo.kt",name:"Foo"}];}});
 record({stage:"files registered"});registerHandler("smoke_events",ev=>record(ev));editor.on("widget_event","smoke_events");
@@ -101,6 +106,7 @@ registerHandler("smoke_free",()=>editor.unmountFloatingWidget(73621));editor.reg
 registerHandler("smoke_parallel",()=>api.configure({symbolLanguages:["kotlin","python","json","kotlin"],timeoutMs:1200}));editor.registerCommand("Smoke Parallel","","smoke_parallel");
 registerHandler("smoke_symbols_override",()=>{remove=api.registerProvider({name:"fixture-symbols",kind:"symbols",async search(q,ctx){record({symbolOverride:q});return [{kind:"symbol",path:ctx.root+"/Foo.kt",name:"Foo",line:1,col:7}];}});});editor.registerCommand("Smoke Symbols Override","","smoke_symbols_override");
 registerHandler("smoke_demo_timeout",()=>api.configure({timeoutMs:4000}));editor.registerCommand("Smoke Demo Timeout","","smoke_demo_timeout");
+registerHandler("smoke_theme_timeout",()=>api.configure({timeoutMs:6000}));editor.registerCommand("Smoke Theme QA Timeout","","smoke_theme_timeout");
 const builtin=editor.getBuiltinThemes(); const dark=JSON.parse(builtin.dark); const light=JSON.parse(builtin.light);
 const custom=JSON.parse(builtin.dark);custom.name="fixture-semantic";custom.ui.help_key_fg=[240,190,90];custom.ui.popup_text_fg=[225,235,245];custom.ui.popup_selection_fg=[250,250,250];custom.ui.popup_selection_bg=[55,70,95];custom.editor.line_number_fg=[150,160,175];custom.editor.current_line_bg=[35,45,60];custom.search.match_bg=[80,55,100];
 editor.saveThemeFile(custom.name,JSON.stringify(custom));editor.reloadThemes();
@@ -176,6 +182,52 @@ def events(): return json.loads((base/'events.json').read_text())
 def mark(name):
     command('Smoke Snapshot'); record('phase', name=name); phases.append({'phase':name,'events':events(),'ansiBytes':len(data),
         'ui':json.loads((base/'ui.json').read_text()),'widget':json.loads((base/'last-widget.json').read_text()) if (base/'last-widget.json').exists() else None})
+native_cells=[]
+def native_picker_proof(name, controls=False):
+    # Replay actual PTY writes/resize events, never the observed widget JSON.
+    import pyte
+    from demo import theme_color
+    screen=pyte.Screen(130,36);stream=pyte.ByteStream(screen)
+    for event in recording:
+        if event['type']=='chunk':stream.feed(bytes(data[event['start']:event['offset']]))
+        elif event['type']=='resize':screen.resize(lines=event['rows'],columns=event['columns'])
+    outcomes=json.loads((base/'update-outcome.json').read_text())['outcomes']
+    assert outcomes and all(outcome is True for outcome in outcomes), (name,'Native update rejected',outcomes)
+    observed=json.loads((base/'ui.json').read_text());cols=observed['dockCols']
+    theme=json.loads((base/'theme-meta.json').read_text())['data']
+    bg=theme_color(theme,'ui.popup_selection_bg');fg=theme_color(theme,'ui.popup_selection_fg')
+    match=theme_color(theme,'search.match_bg')
+    selected=[(y,row) for y,row in enumerate(screen.display) if row.startswith('> ')]
+    assert len(selected)==1,(name,'Selected native row missing',screen.display)
+    y,row=selected[0];inner=cols-1
+    cells=[screen.buffer[y][x] for x in range(inner)]
+    evidence=dict(phase=name,terminal=[screen.columns,screen.lines],dockCols=cols,row=y,innerWidth=inner,
+        text=row[:inner],cells=[dict(col=x,text=c.data,fg=c.fg,bg=c.bg,bold=c.bold) for x,c in enumerate(cells)])
+    native_cells.append(evidence);(base/'picker-cell-evidence.json').write_text(json.dumps(native_cells,indent=2))
+    assert node(observed['tree'],'query')['focused'] is True
+    assert all(c.bg in (bg,match) for c in cells),(name,'Selection fails actual full inner row',evidence)
+    assert all(c.fg==fg for c in cells if c.data.strip()),(name,'Selection foreground fails',evidence)
+    assert screen.buffer[y][inner-1].bg==bg,(name,'Selection does not reach blank/right edge',evidence)
+    assert not any(screen.buffer[y][x].bg==bg for x in range(cols,screen.columns)),(name,'Selection bleeds into preview',evidence)
+    other_bands=[yy for yy in range(screen.lines) if yy!=y and screen.buffer[yy][0].bg==bg]
+    assert not other_bands,(name,'Old selected row not cleared',other_bands)
+    unselected=[yy for yy,r in enumerate(screen.display) if r.startswith('   ')]
+    if unselected:
+        colors={screen.buffer[yy][xx].fg for yy in unselected for xx in range(inner) if screen.buffer[yy][xx].data.strip()}
+        evidence['unselected_foregrounds']=sorted(colors)
+        assert theme_color(theme,'editor.line_number_fg') in colors,(name,'Native metadata role absent/unreadable',evidence)
+        assert theme_color(theme,'syntax.type') in colors,(name,'Native icon role absent',evidence)
+        assert theme_color(theme,'ui.popup_text_fg') in colors,(name,'Native identity role absent',evidence)
+        (base/'picker-cell-evidence.json').write_text(json.dumps(native_cells,indent=2))
+    if controls:
+        visible='\n'.join(r[:inner] for r in screen.display)
+        # Only the narrow six-row layout uses compact native raw key labels.
+        labels=['Query','Grep','↑↓','Tab','↵','Esc'] if screen.lines==6 and cols<48 else ['Query','Grep','↑/↓','Tab','Enter','Esc']
+        assert all(label in visible for label in labels),(name,'Native controls clipped',visible)
+        evidence['visible_controls']=visible
+        (base/'picker-cell-evidence.json').write_text(json.dumps(native_cells,indent=2))
+    return screen
+
 def interrupted(signum, frame):
     raise RuntimeError('Smoke interrupted; cleaning owned processes')
 signal.signal(signal.SIGTERM, interrupted)
@@ -216,13 +268,16 @@ try:
     pump(.19);record('phase', name='demo-spinner-b')
     pump(2.7);(base/'demo-lsp-delay').unlink()
     mark('native bind; live files and fake LSP')
-    keys(b'\x1b[B');mark('demo-foo-arrow');keys(b'\x1b[A');mark('demo-foo-end')
+    native_picker_proof('full query-focused selection',controls=True)
+    keys(b'\x1b[B');mark('demo-foo-arrow');native_picker_proof('down clears old full selection')
+    keys(b'\x1b[A');mark('demo-foo-end');native_picker_proof('up restores full selection')
     state=phases[-1]['ui']['state'];assert not state['pending'] and not state['errors'],state
     assert [r['kind'] for r in state['results']]==['file','symbol','file'],state
-    tree=phases[-1]['ui']['tree'];cards=node(tree, 'results')['itemSpecs']
-    assert cards[2]['entries'][0]['text']=='   Foo.kt:1'
-    assert cards[2]['entries'][1]['text']=='  file · build/Foo.kt:1:1'
-    for row in cards[2]['entries']:assert row['style']['fg']=='editor.line_number_fg'
+    tree=phases[-1]['ui']['tree'];listing=node(tree, 'results');entries=listing['items']
+    assert 'itemSpecs' not in listing
+    assert entries[2]['text'].startswith('   Foo.kt:1') and entries[2]['text'].endswith(' · generated')
+    assert entries[2]['style']['fg']=='ui.popup_text_fg'
+    assert any(o['style'].get('fg')=='editor.line_number_fg' for o in entries[2]['inlineOverlays'])
     snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
     assert snap['panes'][0]['x']==next(e['dockCols'] for e in events() if 'initialPanes' in e) and snap['panes'][0]['width']>65,snap
     assert snap['syntax'], 'Actual native Kotlin buffer has no syntax spans'
@@ -231,22 +286,60 @@ try:
     for name in ['light','fixture-semantic','dark']:
         before=snapshot(); calls=sum('files' in e for e in events());command('Smoke Theme '+name);after=snapshot()
         assert before['panes']==after['panes'] and calls==sum('files' in e for e in events()), 'Idle theme changed preview/providers'
+        # applyTheme animates colors; measure after its native transition settles.
+        pump(.3);native_picker_proof('theme idle '+name,controls=True)
         record('phase',name='theme-idle-'+name)
         theme_evidence.append(dict(state='idle',name=name,data=json.loads((base/'theme-meta.json').read_text())['data'],panesUnchanged=True,providerCallsUnchanged=True))
-    (base/'demo-lsp-delay').write_text('2.8')
+    # Theme animation settling/replay QA is outside both showcase clips.
+    command('Smoke Theme QA Timeout');(base/'demo-lsp-delay').write_text('5')
+    before_query=sum('files' in e for e in events())
     keys(b'X',.05);keys(b'\x7f',.1)
+    dispatch_deadline=time.monotonic()+2
+    while sum('files' in e for e in events())<=before_query or next(e['files'] for e in reversed(events()) if 'files' in e)!='Foo':
+        assert time.monotonic()<dispatch_deadline, 'Theme fixture query did not dispatch'
+        pump(.05)
+    # Count after the query's normal debounce/dispatch, not before it.
     for name in ['light','fixture-semantic','dark']:
         assert json.loads((base/'ui.json').read_text())['state']['pending']>0
         calls=sum('files' in e for e in events());command('Smoke Theme '+name)
         assert calls==sum('files' in e for e in events()), 'Pending theme reran provider'
+        pump(.3);native_picker_proof('theme pending '+name,controls=True)
+        assert json.loads((base/'ui.json').read_text())['state']['pending']>0, 'Theme QA must still be pending after native settling'
         record('phase',name='theme-pending-'+name)
         theme_evidence.append(dict(state='pending',name=name,data=json.loads((base/'theme-meta.json').read_text())['data'],providerCallsUnchanged=True))
-    pump(3);(base/'demo-lsp-delay').unlink();(base/'theme-evidence.json').write_text(json.dumps(theme_evidence,indent=2))
+    pump(5);(base/'demo-lsp-delay').unlink();command('Smoke Demo Timeout');(base/'theme-evidence.json').write_text(json.dumps(theme_evidence,indent=2))
     provider_calls=sum('files' in e for e in events())
-    for rows in [18,6,36]:
-        record('resize', rows=rows, columns=130)
-        fcntl.ioctl(m,termios.TIOCSWINSZ,struct.pack('HHHH',rows,130,0,0));os.kill(p.pid,signal.SIGWINCH);pump(.5);mark('resize '+str(rows))
+    for columns,rows in [(65,36),(130,36),(130,18),(65,18),(130,18),(130,6),(65,6),(130,36)]:
+        record('resize', rows=rows, columns=columns)
+        fcntl.ioctl(m,termios.TIOCSWINSZ,struct.pack('HHHH',rows,columns,0,0));os.kill(p.pid,signal.SIGWINCH);pump(.5);mark('resize '+str(columns)+'x'+str(rows))
         assert sum('files' in e for e in events())==provider_calls,'resize re-queried provider'
+        native_picker_proof('resize '+str(columns)+'x'+str(rows),controls=True)
+    keys(b'\x1b');keys(b'\x1bs');keys('界'.encode(),1);mark('native Unicode clipping')
+    for columns in [130,65,130]:
+        record('resize',rows=36,columns=columns)
+        fcntl.ioctl(m,termios.TIOCSWINSZ,struct.pack('HHHH',36,columns,0,0));os.kill(p.pid,signal.SIGWINCH);pump(.5)
+        screen=native_picker_proof('Unicode clipping '+str(columns),controls=True)
+        proof=native_cells[-1];row=proof['row'];inner=proof['innerWidth']
+        text=''.join(screen.buffer[row][x].data for x in range(inner))
+        assert '界𐐀' in text,('Unicode identity clipped',proof)
+        # Native viewport clips the unchanged entry; no code-point truncation hint.
+        from wcwidth import wcswidth
+        observed=json.loads((base/'ui.json').read_text())
+        entry=node(observed['tree'],'results')['items'][0]
+        assert entry['text']=='>  界𐐀'+'Long'*24+' · 界𐐀Long.kt:1',('Unicode source identity changed',entry)
+        assert 'truncateToChars' not in entry and 'truncateToChars' not in node(observed['tree'],'selected-location')['entries'][0]
+        for x in range(inner):
+            c=screen.buffer[row][x]
+            if wcswidth(c.data)==2:
+                assert x+1<inner and screen.buffer[row][x+1].data=='',('Split wide glyph at viewport edge',proof,x)
+            if c.data=='':
+                assert x>0 and wcswidth(screen.buffer[row][x-1].data)==2,('Orphan wide continuation',proof,x)
+        assert screen.buffer[row][inner].data=='│',('Unicode entry crosses native separator',proof)
+        assert not any('LongLong' in ''.join(screen.buffer[y][x].data for x in range(inner)) for y in range(row+1,row+3)),('Unicode entry wrapped beyond one row',proof)
+        assert screen.buffer[row][4].bg==__import__('demo').theme_color(json.loads((base/'theme-meta.json').read_text())['data'],'search.match_bg') and screen.buffer[row][4].bold,('CJK match byte overlay absent',proof)
+        assert screen.buffer[row][5].bg==screen.buffer[row][4].bg and screen.buffer[row][5].bold,('CJK continuation match lost',proof)
+        proof['unicode_clip']=dict(identityPrefix=text[:7],unchangedEntry=True,oneRow=True,wideCellsIntact=True,separatorIntact=True,matchCells=[4,5])
+        (base/'picker-cell-evidence.json').write_text(json.dumps(native_cells,indent=2))
     keys(b'\x1b');keys(b'\x1bs');keys(b'manyfoo',1);mark('many cards')
     for _ in range(18):keys(b'\x1b[B',.03)
     mark('many cards scrolled')
@@ -298,8 +391,9 @@ try:
     keys(b'\r',1);mark('full nonliteral callback override')
     assert len(phases[-1]['ui']['state']['results'])==2 and not phases[-1]['ui']['state']['errors']
     assert sum('override' in e for e in events())==1, 'same-name registration duplicated'
-    cards=node(phases[-1]['ui']['tree'], 'results')['itemSpecs']
-    assert cards[0]['entries'][0]['text']=='>  Bar.kt:1' and 'CUSTOM' not in str(cards)
+    listing=node(phases[-1]['ui']['tree'], 'results');entries=listing['items']
+    assert 'itemSpecs' not in listing
+    assert entries[0]['text'].startswith('>  Bar.kt:1 · class Bar') and 'CUSTOM' not in str(entries)
     keys(b'\x1b[Z');keys(b'\x1b[B');keys(b'\x1b[A');keys(b'\r');mark('grep native open')
     snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
     assert next(b for b in snap['buffers'] if b['id']==snap['active'])['path']==str(root/'Bar.kt'),snap

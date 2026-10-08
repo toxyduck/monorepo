@@ -22,6 +22,11 @@ test("byte/UTF-16 boundaries include non-BMP; reject half character", () => {
   assert.equal(byteToUtf16('é😀x', 3), null); assert.equal(utf16ToByte('é😀x', 2), null);
   assert.equal(byteToUtf16('x', 3), null);
   assert.equal(rich('é😀x', [[1, 3]]).inlineOverlays![0].end, 6);
+  // Native serialization distinguishes absent optional flags from present undefined.
+  const syntax = rich('é😀x', [], false, [{start: 0, end: 7, color: 'syntax.function'},
+    {start: 0, end: 2, color: 'syntax.type', bold: false, italic: true}]).inlineOverlays!;
+  assert.deepEqual(syntax[0].style, {fg: 'syntax.function'});
+  assert.deepEqual(syntax[1].style, {fg: 'syntax.type', bold: false, italic: true});
 });
 test("UTF-8 length handles empty, ASCII, BMP and non-BMP text", () => {
   assert.equal(utf8Length(''), 0);
@@ -111,21 +116,26 @@ test("candidate cap is explicit; display cap applies after available candidate r
   assert.equal(disk.results.length,2);assert(disk.warnings[0].includes('Candidate cap'));
   assert.equal(rank([{...file,path:'/root/build/Foo.kt'},file],'Foo',defaultDemotePaths,1)[0].path,file.path);
 });
-test("filename headlines and whole demoted cards, validated configuration", () => {
-  const s = initial(); replaceResults(s, [{...file, path: '/root/build/Foo.kt', snippet: 'class Foo {}'}]);
-  const tree = spec(s, defaultDemotePaths, [], 'file provider not configured', '/root') as any;
-  const card = tree.children.find((c:any)=>c.kind==='labeledSection').child.itemSpecs[0];
-  assert.equal(card.entries.length, 3);
-  for (const row of card.entries) assert.equal(row.style.fg, BRAND_PALETTE.selectedFg);
-  s.selected = null;
-  const demotedCard = (spec(s, defaultDemotePaths, [], "", "/root") as any).children.find((c:any) => c.kind === "labeledSection").child.itemSpecs[0];
-  for (const row of demotedCard.entries) assert.equal(row.style.fg, BRAND_PALETTE.demoted);
-  assert.equal(card.entries[0].text, '>  Foo.kt:1');
-  assert.equal(card.entries[1].text, '│ file · build/Foo.kt:1:1');
-  assert(card.entries[0].text.startsWith('> '));
-  assert.throws(() => configure(defaults(), {maxResults: 999}));
-  assert.throws(() => configure(defaults(), {openShortcut: 'x'} as any));
-  assert.throws(() => validateProvider({name: 'x', kind: 'files', search: 'bad'} as any));
+const listOf = (tree:any) => tree.children.find((c:any) => c.key === 'results');
+const headerOf = (tree:any) => tree.children.find((c:any) => c.key === 'results-status').entries[0].text;
+test("flat one-row picker preserves configuration guards and native list entry shape", () => {
+  const s=initial();replaceResults(s,[{...file,path:'/root/build/Foo.kt'}]);
+  const tree=spec(s,defaultDemotePaths,[],'unsafe','/root') as any;
+  assert(!tree.children.some((c:any)=>c.kind==='labeledSection'));
+  assert(!JSON.stringify(tree).includes('SEARCH EVERYWHERE'));
+  const list=listOf(tree), row=list.items[0];
+  assert(!('itemSpecs' in list));assert.equal(list.items.length,s.results.length);
+  for(const entry of list.items) {assert.equal(typeof entry.text,'string');assert(!('entries' in entry));}
+  assert.equal(row.text,'>  Foo.kt:1 · build/ · file · generated');
+  assert.deepEqual(row.style,{fg:BRAND_PALETTE.selectedFg,bg:BRAND_PALETTE.selectedBg});
+  assert.equal(list.focusable,false);assert.deepEqual(list.itemKeys,[s.selected]);
+  s.selected=null;
+  const normal=listOf(spec(s,defaultDemotePaths,[],'','/root')).items[0];
+  assert.equal(normal.style.fg,BRAND_PALETTE.text);assert(!normal.style.bg);
+  assert(normal.inlineOverlays.some((o:any)=>o.style.fg===BRAND_PALETTE.secondary));
+  assert.throws(()=>configure(defaults(),{maxResults:999}));
+  assert.throws(()=>configure(defaults(),{openShortcut:'x'} as any));
+  assert.throws(()=>validateProvider({name:'x',kind:'files',search:'bad'} as any));
 });
 
 test("native match metadata: exact saved CRLF line, UTF8, clipping and no invented regex", () => {
@@ -140,79 +150,78 @@ test("native match metadata: exact saved CRLF line, UTF8, clipping and no invent
   assert.deepEqual(validatedRanges('a\ud800b', [[1,2]]), []);
   assert.deepEqual(previewMatches(savedLocation({kind:'symbol',path:'/root/Foo.kt',name:'Foo',line:1,col:7},'class Foo {}')!, 'Foo'), [[6,9]]);
 });
-test("height budget shrinks and restores without changing result selection", () => {
-  const s=initial();replaceResults(s,[file]);const selected=s.selected;
-  for(const height of [36,18,6,36]) {
-    const tree=spec(s,[],[],"","/root",height) as any;
-    const list=tree.children.find((c:any)=>c.kind==='labeledSection').child;
-    assert.equal(list.visibleRows,Math.max(1,height-(height<9?5:7)));
-    assert.equal(s.selected,selected);
-    assert.equal(tree.children.some((c:any)=>c.kind==='hintBar'),height>=9);
-  }
-});
-
-
-
-test("literal saved snippet display shares ranges; every kind has filename:line headline", () => {
-  const snippet = 'İ 😀Foo foo F.o';
-  const r = savedLocation({...file, snippet}, snippet+'\r\n')!;
-  assert.deepEqual(previewMatches(r,'fOo'), [[4,7],[8,11]]);
-  assert.deepEqual(previewMatches(r,'F.o'), [[12,15]]);
-  assert.deepEqual(previewMatches(r,'missing'), []);
-  assert.deepEqual(previewMatches(r,'Ffo'), []); // no fuzzy code highlighting
-  assert.deepEqual(previewMatches({...r,kind:'content',matches:undefined},'Foo'), []);
-  const s=initial();s.query='Foo';
-  replaceResults(s,[savedLocation(file,'class Foo {}')!,
-    savedLocation({...file,kind:'symbol',line:1,col:7},'class Foo {}')!,
-    savedLocation({...file,kind:'content',name:'CUSTOM',line:1,col:7,snippet:'class Foo {}',matches:{snippet:[[6,9]]}},'class Foo {}')!]);
+test("height and dock-width modes retain identity, stable selection and all controls", () => {
+  const s=initial();replaceResults(s,[{...file,path:'/root/long/directory/Foo.kt',line:42,col:7}]);
   const selected=s.selected;
-  const cards=(spec(s,[],[],'','/root') as any).children.find((c:any)=>c.kind==='labeledSection').child.itemSpecs;
-  assert.deepEqual(cards.map((c:any)=>c.entries[0].text),['>  Foo.kt:1','   Foo.kt:1','   Foo.kt:1']);
-  assert.deepEqual(cards.map((c:any)=>c.entries[1].text),['│ file · Foo.kt:1:1','  symbol Foo · Foo.kt:1:7','  text · Foo.kt:1:7']);
-  for (const c of cards) assert.deepEqual(c.entries[2].inlineOverlays[0],{start:c.entries[2].text.startsWith('│')?10:8,end:c.entries[2].text.startsWith('│')?13:11,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
-  assert.equal(s.selected,selected);
-});
-
-test("shared three-cell pulse stays near Results; footer keeps safety and counts", () => {
-  assert.deepEqual(BRAND_PALETTE, {
-    accent:'ui.help_key_fg', text:'ui.popup_text_fg', secondary:'ui.popup_text_fg',
-    demoted:'editor.line_number_fg', selectedBg:'ui.popup_selection_bg', selectedFg:'ui.popup_selection_fg',
-    previewRowBg:'editor.current_line_bg', matchBg:'search.match_bg', loadingAccent:'ui.help_key_fg',
-  });
-  assert.equal(LOADING_STEP_MS,180);
-  assert.deepEqual(LOADING_FRAMES,['•··','·•·','··•','·•·']);
-  for (const phase of [-5,-1,0,1,3,4,9]) {
-    assert.equal([...loadingFrame(phase)].length,3);
-    assert.equal(loadingFrame(phase),loadingFrame(phase+4));
+  for(const height of [6,18,36]) for(const width of [28,48,52,28,52]) {
+    const tree=spec(s,[],[],'safety','/root',height,0,width) as any, list=listOf(tree);
+    assert(!('itemSpecs' in list));assert.equal(list.items.length,s.results.length);
+    assert.equal(list.visibleRows,Math.max(1,height-(height<9?5:6)));
+    assert.equal(list.selectedIndex,0);assert.equal(list.itemKeys[0],selected);assert.equal(s.selected,selected);
+    const entry=list.items[0];
+    assert(!('truncateToChars' in entry));
+    assert.equal(entry.text.includes('long/directory/'),width>=48);
+    const locationEntry=tree.children.find((c:any)=>c.key==='selected-location').entries[0];
+    assert(!('truncateToChars' in locationEntry));
+    const location=locationEntry.text;
+    assert.equal(location,width<48?'Foo.kt:42:7 · long/directory/Foo.kt:42:7':'long/directory/Foo.kt:42:7');
+    const controls=height<9?tree.children.at(-1).children:[tree.children[1],tree.children.at(-1)];
+    assert.equal(controls[0].key,'grep');assert.equal(controls[0].label,'Grep');
+    if(height<9&&width<48) {
+      assert.equal(controls[1].kind,'raw');assert.equal(controls[1].entries.length,1);
+      assert.equal(controls[1].entries[0].text,' ↑↓ Tab ↵ Esc');
+      assert.deepEqual(controls[1].entries[0].style,{fg:BRAND_PALETTE.accent});
+    } else assert.deepEqual(controls[1].entries.map((e:any)=>e.keys),['↑/↓','Tab','Enter','Esc']);
+    if(height===6) {assert.equal(tree.children.length,6);assert.equal(tree.children.at(-1).kind,'row');}
   }
-  const s=initial();s.pending=1;s.errors=['Refused'];s.warnings=['partial'];
-  const footer=(phase:number)=>(spec(s,[],[],'','/root',18,phase) as any).children.filter((c:any)=>c.kind==='raw').at(-1).entries[0];
-  const a=footer(0),b=footer(1);
-  assert.equal([...a.text].length,[...b.text].length);
-  assert(a.text.startsWith('Refused · Incomplete: partial'));
-  assert.equal(a.text, b.text);
-  const label = (phase:number) => (spec(s,[],[],'','/root',18,phase) as any).children.find((c:any)=>c.kind==='labeledSection').label;
-  assert.equal(label(0), 'Results · •·· Searching');
-  assert.equal(label(1), 'Results · ·•· Searching');
-  s.pending=0;assert(!footer(2).text.includes('Searching'));assert.equal(footer(2).inlineOverlays.length,0);
 });
 
-test("selected three-row palette and literal/regex Unicode offsets use actual prefixes", () => {
-  const s=initial();s.query='needle';
-  const snippet='é😀needle';
-  replaceResults(s,[{...file,path:'/root/é😀needle.kt',snippet},
-    {...file,path:'/root/build/é😀needle.kt',kind:'content',snippet,matches:{snippet:[[3,9]]}}]);
-  const cards=()=> (spec(s,defaultDemotePaths,[],'','/root') as any).children.find((c:any)=>c.kind==='labeledSection').child.itemSpecs;
-  let rows=cards()[0].entries;
-  for(const row of rows) assert.deepEqual(row.style.bg,BRAND_PALETTE.selectedBg);
-  assert.deepEqual(rows[0].style.fg,BRAND_PALETTE.selectedFg);assert.equal(rows[0].style.bold,true);
-  assert.deepEqual(rows[1].style.fg,BRAND_PALETTE.selectedFg);
-  assert.deepEqual(rows[0].inlineOverlays[0],{start:12,end:18,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
-  assert.deepEqual(rows[2].inlineOverlays[0],{start:10,end:16,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
-  s.selected=key(s.results[1]);s.query='n.*e';rows=cards()[1].entries;
-  for(const row of rows) {assert.deepEqual(row.style.bg,BRAND_PALETTE.selectedBg);assert.deepEqual(row.style.fg,BRAND_PALETTE.selectedFg);}
-  assert.deepEqual(rows[2].inlineOverlays[0],{start:10,end:16,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
-  assert.deepEqual(rows[2].inlineOverlays.at(-1).style,{fg:BRAND_PALETTE.selectedFg});
+test("semantic regions and literal/regex ranges use actual non-BMP, CJK and glyph prefixes", () => {
+  const s=initial();s.query='needle';const snippet='é😀中needle';
+  replaceResults(s,[{...file,path:'/root/目录/😀中needle.kt',kind:'symbol',name:'😀中needle',line:2,col:1},
+    {...file,path:'/root/目录/😀中needle.kt',kind:'content',line:2,col:1,snippet,matches:{snippet:[[4,10]]}}]);
+  const rows=()=>listOf(spec(s,[],[],'','/root',18,0,52)).items;
+  const symbol=rows()[0];assert(symbol.text.startsWith('>  😀中needle · 😀中needle.kt:2'));
+  for(const overlay of symbol.inlineOverlays.filter((o:any)=>o.style.fg)) assert.equal(overlay.style.fg,BRAND_PALETTE.selectedFg);
+  s.selected=null;
+  const normal=rows()[0];
+  for(const role of [BRAND_PALETTE.icon,BRAND_PALETTE.symbol,BRAND_PALETTE.text,BRAND_PALETTE.secondary])
+    assert(normal.inlineOverlays.some((o:any)=>o.style.fg===role));
+  assert(normal.inlineOverlays.some((o:any)=>o.style.fg===BRAND_PALETTE.symbol&&o.style.bold));
+  const checkMatches=(row:any,expected:number) => {
+    const bytes=Buffer.from(row.text);const spans=row.inlineOverlays.filter((o:any)=>o.style.bg===BRAND_PALETTE.matchBg);
+    assert.equal(spans.length,expected);
+    for(const o of spans) {assert.equal(bytes.subarray(o.start,o.end).toString(),'needle');assert(!('fg' in o.style));assert.equal(o.unit,'byte');}
+  };
+  checkMatches(normal,2);checkMatches(rows()[1],2);
+  s.query='n.*e';s.selected=key(s.results[1]);
+  const regex=rows()[1];checkMatches(regex,1);
+  assert.deepEqual(regex.style,{fg:BRAND_PALETTE.selectedFg,bg:BRAND_PALETTE.selectedBg});
+  const narrow=listOf(spec(s,[],[],'','/root',18,0,28)).items[1];
+  checkMatches(narrow,1);assert(!narrow.text.includes('目录/'));assert(narrow.text.includes(snippet));
+});
+
+test("shared pulse leaves header geometry and safety footer stable", () => {
+  assert.equal(BRAND_PALETTE.secondary,'editor.line_number_fg');assert.equal(BRAND_PALETTE.symbol,'syntax.function');
+  assert.equal(BRAND_PALETTE.icon,'syntax.type');assert.equal(LOADING_STEP_MS,180);
+  assert.deepEqual(LOADING_FRAMES,['•··','·•·','··•','·•·']);
+  for(const phase of [-5,-1,0,1,3,4,9]) {assert.equal([...loadingFrame(phase)].length,3);assert.equal(loadingFrame(phase),loadingFrame(phase+4));}
+  const s=initial();s.pending=1;s.errors=['Refused'];s.warnings=['partial'];
+  const tree=(phase:number)=>spec(s,[],[],'','/root',18,phase) as any;
+  assert.equal(headerOf(tree(0)),'Results · 0 · Searching •··');
+  assert.equal(headerOf(tree(1)),'Results · 0 · Searching ·•·');
+  assert.equal(headerOf(tree(0)).length,headerOf(tree(1)).length);
+  const footer=(phase:number)=>tree(phase).children.filter((c:any)=>c.kind==='raw').at(-1).entries[0];
+  assert.equal(footer(0).text,'Refused · Incomplete: partial · 0 results');assert.equal(footer(0).text,footer(1).text);
+  assert.equal(footer(0).style.fg,BRAND_PALETTE.text);
+  replaceResults(s,[file]);s.selected=null;
+  const safetyTree=spec(s,[],[{text:'Unsaved edits: native saved preview/location unavailable'}],
+    'dirty-file refusal','/root',18) as any;
+  const safetyFooter=safetyTree.children.filter((c:any)=>c.kind==='raw').at(-1).entries[0];
+  assert.equal(safetyFooter.text,'dirty-file refusal · Unsaved edits: native saved preview/location unavailable · Refused · Incomplete: partial · 1 results');
+  assert.equal(safetyFooter.style.fg,BRAND_PALETTE.text);
+  assert(listOf(safetyTree).items[0].inlineOverlays.some((o:any)=>o.style.fg===BRAND_PALETTE.secondary));
+  s.pending=0;assert.equal(headerOf(tree(2)),'Results · 1');
 });
 
 // Load the entire entry with its real imported functions and native named handlers.
@@ -232,7 +241,7 @@ async function entryFixture() {
     activeWindow:()=>windowId, getAuthorityLabel:()=>authority, listWindows:()=>windows,
     listBuffers:()=>buffers, listSplits:()=>splits, getActiveSplitId:()=>1,
     getActiveBufferId:()=>splits[0].bufferId, getBufferInfo:(id:number)=>buffers.find(b=>b.id===id),
-    getPrimaryCursor:()=>({position:3}), dockOpen:()=>false,
+    getPrimaryCursor:()=>({position:3}), dockOpen:()=>false, dockCols:()=>52,
     mountFloatingWidget:(_id:number, tree:any)=>{widget=tree;return true;},
     updateFloatingWidget:(_id:number, tree:any)=>{widget=tree;calls.push(['draw']);},
     unmountFloatingWidget:()=>calls.push(['unmount']),
@@ -248,7 +257,7 @@ async function entryFixture() {
     getLineStartPosition:async()=>0,getLineEndPosition:async()=>12,getBufferText:async()=> 'class Foo {}',
     addOverlay:(...args:any[])=>calls.push(['overlay',...args]),
     openMachine:async()=>({readFilePrefixes:async()=>[{path:file.path,text:'class Foo {}'}],close:async()=>true}),
-    on:()=>{},defineMode:()=>{},registerCommand:()=>{},exportPluginApi:(_name:string,value:any)=>{api=value;},
+    on:()=>{},defineMode:(_name:string,bindings:any)=>calls.push(['bindings',bindings]),registerCommand:()=>{},exportPluginApi:(_name:string,value:any)=>{api=value;},
   };
   const context = {getEditor:()=>editor,registerHandler:(name:string,fn:any)=>handlers.set(name,fn),
     configure,defaults,validateProvider,canonicalPath,key,previewMatches,utf16ToByte,diskResults,grep,symbolLanguage,
@@ -291,21 +300,21 @@ test("loader owns pending generation, resets deadlines and never dispatches sear
   let resolve!:(value:any[])=>void;
   f.api.registerProvider({name:'files',kind:'files',search:()=>{searches++;return new Promise(r=>{resolve=r;});}});
   f.invoke('search_everywhere_open');f.change('Foo');await f.settle();
-  const label=()=>f.widget.children.find((c:any)=>c.kind==='labeledSection').label;
+  const label=()=>headerOf(f.widget);
   const loading=()=>[...f.intervals.values()].filter(i=>i.name==='search_everywhere_loading');
   assert.equal(loading().length,1);assert.equal(loading()[0].ms,180);
-  assert.equal(label(),'Results · •·· Searching');f.invoke('search_everywhere_loading');assert.equal(label(),'Results · •·· Searching');
-  f.setNow(1180);f.invoke('search_everywhere_loading');assert.equal(label(),'Results · ·•· Searching');
-  f.setNow(1200);f.change('Other');assert.equal(label(),'Results · •·· Searching');assert.equal(loading().length,1);
-  f.invoke('search_everywhere_loading');assert.equal(label(),'Results · •·· Searching');
-  f.setNow(1380);f.invoke('search_everywhere_loading');assert.equal(label(),'Results · ·•· Searching');
+  assert.equal(label(),'Results · 0 · Searching •··');f.invoke('search_everywhere_loading');assert.equal(label(),'Results · 0 · Searching •··');
+  f.setNow(1180);f.invoke('search_everywhere_loading');assert.equal(label(),'Results · 0 · Searching ·•·');
+  f.setNow(1200);f.change('Other');assert.equal(label(),'Results · 0 · Searching •··');assert.equal(loading().length,1);
+  f.invoke('search_everywhere_loading');assert.equal(label(),'Results · 0 · Searching •··');
+  f.setNow(1380);f.invoke('search_everywhere_loading');assert.equal(label(),'Results · 0 · Searching ·•·');
   assert.equal(searches,1);assert(!f.calls.some(c=>c[0]==='overlay'));
   resolve([]);await f.settle();assert.equal(searches,2);resolve([]);await f.settle();
-  assert.equal(loading().length,0);assert.equal(label(),'Results');
+  assert.equal(loading().length,0);assert.equal(label(),'Results · 0');
   f.change('Again');await f.settle();f.invoke('search_everywhere_close');assert.equal(f.intervals.size,0);
   f.setNow(2000);f.invoke('search_everywhere_loading');assert.equal(f.intervals.size,0);
-  f.invoke('search_everywhere_open');f.change('Next');assert.equal(label(),'Results · •·· Searching');
-  f.invoke('search_everywhere_loading');assert.equal(label(),'Results · •·· Searching');
+  f.invoke('search_everywhere_open');f.change('Next');assert.equal(label(),'Results · 0 · Searching •··');
+  f.invoke('search_everywhere_loading');assert.equal(label(),'Results · 0 · Searching •··');
   f.invoke('search_everywhere_close');
 });
 
@@ -336,4 +345,40 @@ test("throwing provider cancellation cannot prevent Escape cleanup or timeout lo
   assert(f.calls.some(c=>c[0]==='unmount'));assert(f.calls.some(c=>c[0]==='restore'&&c[1]===1));
   assert.equal(f.calls.filter(c=>c[0]==='status'&&c[1].includes('cancellation callback failed')).length,2);
   reject(new Error('closed rejection'));await f.settle();assert.equal(f.intervals.size,0);
+});
+
+
+test("native resize and named controls use current dock cells without new lifecycle owners", async () => {
+  const f=await entryFixture();f.api.configure({symbolLanguages:[]});
+  f.editor.openMachine=async()=>({readFilePrefixes:async()=>[{path:file.path,text:'class Foo {}'},{path:'/root/nested/Other.kt',text:'class Other {}'}],close:async()=>true});
+  f.api.registerProvider({name:'files',kind:'files',search:async()=>[file,{...file,path:'/root/nested/Other.kt'}]});
+  let cols=52;f.editor.dockCols=()=>cols;
+  f.invoke('search_everywhere_open');f.change('Foo');await f.settle();
+  const timers=f.intervals.size;
+  for(const width of [28,48,52,28,52]) {
+    cols=width;f.invoke('search_everywhere_resize');
+    assert(!('truncateToChars' in listOf(f.widget).items[0]));
+    assert.equal(listOf(f.widget).items[0].text.includes(' · file'),width>=48);
+    assert.equal(f.intervals.size,timers);
+  }
+  cols=28;f.editor.listSplits()[0].height=6;f.invoke('search_everywhere_resize');
+  assert.equal(f.widget.children.length,6);assert.equal(listOf(f.widget).visibleRows,1);
+  const compact=f.widget.children.at(-1);assert.equal(compact.kind,'row');
+  assert.equal(compact.children[0].key,'grep');
+  assert.equal(compact.children[1].kind,'raw');
+  assert.equal(compact.children[1].entries[0].text,' ↑↓ Tab ↵ Esc');
+  assert.deepEqual(Array.from(f.calls.find(c=>c[0]==='bindings')[1],(b:any)=>Array.from(b)),
+    [['Enter','search_everywhere_enter','shortcut'],['Escape','search_everywhere_close','shortcut']]);
+  const second=listOf(f.widget).itemKeys[1];
+  f.invoke('search_everywhere_event',{panel_id:73621,window_id:1,widget_key:'results',event_type:'select',payload:{index:1,key:second}});
+  await f.settle();assert.equal(listOf(f.widget).selectedIndex,1);
+  assert.deepEqual(listOf(f.widget).items[1].style,{fg:BRAND_PALETTE.selectedFg,bg:BRAND_PALETTE.selectedBg});
+  assert(!listOf(f.widget).items[0].style.bg);
+  f.invoke('search_everywhere_event',{panel_id:73621,window_id:1,widget_key:'grep',event_type:'toggle',payload:{checked:true}});
+  assert.equal(f.widget.children.at(-1).children[0].checked,true);
+  f.invoke('search_everywhere_event',{panel_id:73621,window_id:1,widget_key:'grep',event_type:'toggle',payload:{checked:false}});
+  f.change('');await f.settle();f.invoke('search_everywhere_enter');
+  assert(f.calls.some(c=>c[0]==='status'&&c[1].includes('empty query')));
+  assert(!f.calls.some(c=>c[0]==='unmount'));
+  f.invoke('search_everywhere_close');assert.equal(f.intervals.size,0);
 });

@@ -168,7 +168,8 @@ def main():
     if version_log and not supported:
         checks[-1].update(status='BLOCKED', detail='Requires original Fresh 0.5.2.')
     if supported:
-        native_log = check('native-pty', [sys.executable, 'tests/smoke.py', fresh], timeout=100)
+        # The viewport/Unicode/six-theme QA precedes the existing lifecycle cases.
+        native_log = check('native-pty', [sys.executable, 'tests/smoke.py', fresh], timeout=240)
         # Fresh writes its API declarations on editor startup. Reuse only the
         # owned smoke config, never the user's existing declaration directory.
         evidence = None

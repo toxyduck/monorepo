@@ -59,6 +59,11 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(demo.dot_position(native.resize((23,16)))[0],phase)
         with self.assertRaisesRegex(ValueError,'not distinguishable'):
             demo.dot_position(renderer.Image.new('RGB',(23,16),'black'))
+        screen=renderer.pyte.Screen(65,18);stream=renderer.pyte.ByteStream(screen)
+        stream.feed('\x1b[3;1HResults · 24 · Searching ·•·'.encode())
+        proof=demo.pulse_cells(screen)
+        self.assertEqual(proof['position'],[2,25])
+        self.assertEqual(proof['chars'],'·•·')
 
     def test_readme_preserved_on_errors_and_concurrency(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -129,12 +134,30 @@ class DemoTests(unittest.TestCase):
         failed=subprocess.CompletedProcess(['ffmpeg'],1,b'',b'encoding failed')
         with patch('subprocess.run',return_value=failed):
             with self.assertRaisesRegex(RuntimeError,'encoding failed'): demo.invoke(['ffmpeg'])
+        with patch.object(demo,'invoke') as encode, patch.object(demo,'verify_gif',return_value={'frames':3}):
+            demo.make_gif(Path('/tmp/evidence'), 'ffmpeg', .375, Path('/tmp/lossless-frames'))
+            command=encode.call_args.args[0]
+            self.assertEqual(command[command.index('-i')+1], '/tmp/lossless-frames/%04d.png')
+            self.assertNotIn('/tmp/evidence/demo.mp4', command)
 
     def test_truecolor_reverse_bold_underline_wide_and_pua(self):
         try: renderer=demo.Renderer()
         except demo.Blocked as error: self.skipTest(str(error))
         screen=renderer.pyte.Screen(130,36); stream=renderer.pyte.ByteStream(screen)
         stream.feed('\x1b[38;2;125;85;10;1;4mA\x1b[7mB\x1b[0m界\ue634'.encode())
+        # Theme White is native indexed 15; ANSI 37 remains indexed 7.
+        # Bold does not promote either color in the recorded cell attributes.
+        theme={'ui':{'white':'White','gray':'Gray','rgb':[255,255,255]}}
+        self.assertEqual(demo.theme_color(theme,'ui.white'),'ffffff')
+        self.assertEqual(demo.theme_color(theme,'ui.gray'),'e5e5e5')
+        self.assertEqual(demo.theme_color(theme,'ui.rgb'),'ffffff')
+        color_screen=renderer.pyte.Screen(20,1)
+        renderer.pyte.ByteStream(color_screen).feed(b'\x1b[37mA\x1b[1mB\x1b[0;97mC\x1b[1mD\x1b[0;38;2;255;255;255mE')
+        self.assertEqual([color_screen.buffer[0][x].fg for x in range(5)],
+                         ['white','white','brightwhite','brightwhite','ffffff'])
+        self.assertEqual([color_screen.buffer[0][x].bold for x in range(5)],
+                         [False,True,False,True,False])
+        self.assertEqual(demo.COLORS['white'],'e5e5e5')
         self.assertEqual(screen.buffer[0][0].fg,'7d550a')
         self.assertTrue(screen.buffer[0][0].bold and screen.buffer[0][0].underscore)
         image=renderer.image(screen)

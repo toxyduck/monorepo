@@ -5,12 +5,14 @@ import {BRAND_PALETTE as palette, loadingFrame} from "../../_shared/runtime_bran
 export function rich(text: string, matches: Range[] = [], grey = false, syntax: TsHighlightSpan[] = []): TextPropertyEntry {
   // Native offsets are bytes, not JS UTF-16 or Unicode scalar indices.
   const inlineOverlays: InlineOverlay[] = syntax.map(s => ({start: s.start, end: s.end,
-    style: {fg: s.color, bold: s.bold, italic: s.italic}, unit: "byte"}));
+    // QuickJS's native bridge maps present undefined values to null; omit absent flags.
+    style: {fg: s.color, ...(s.bold === undefined ? {} : {bold: s.bold}),
+      ...(s.italic === undefined ? {} : {italic: s.italic})}, unit: "byte"}));
   for (const [a, b] of matches) {
     const start = utf16ToByte(text, a), end = utf16ToByte(text, b);
     if (start !== null && end !== null) inlineOverlays.push({start, end, style: {bold: true, bg: palette.matchBg}, unit: "byte"});
   }
-  // Native syntax keeps its foreground; selection is handled at the card boundary.
+  // Native syntax keeps its foreground; selection is handled at the result-row boundary.
   if (grey && !syntax.length) inlineOverlays.push({start: 0, end: utf8Length(text), style: {fg: palette.demoted}, unit: "byte"});
   return {text, inlineOverlays, ...(grey ? {style: {fg: palette.demoted}} : {})};
 }
@@ -18,53 +20,78 @@ export function fileIcon(path: string): string {
   const icons: Record<string, string> = {kt: "", kts: "", ts: "", tsx: "", js: "", json: "", py: "", rs: "", md: "", sh: "", yaml: "", yml: ""};
   return icons[path.split(".").pop()!.toLowerCase()] || "󰈙";
 }
-function resultCard(s: State, r: SearchResult, patterns: string[], root: string): unknown {
-  const active = key(r) === s.selected, grey = !active && demoted(r.path, patterns), icon = fileIcon(r.path);
+// Regions are local UTF-16 ranges; convert once after joining the actual prefixes.
+function resultRow(s: State, r: SearchResult, patterns: string[], root: string, width: number): TextPropertyEntry {
+  const active = key(r) === s.selected;
   const basename = r.path.split("/").pop() || r.path;
-  const title = basename + ":" + (r.line || 1);
   const relative = root && r.path.startsWith(root + "/") ? r.path.slice(root.length + 1) : basename;
-  const location = relative + ":" + (r.line || 1) + ":" + (r.col || 1);
-  const prefix = (active ? "> " : "  ") + icon + " ", rail = active ? "│ " : "  ";
-  const row = (text: string, ranges: Range[], titleRow = false): TextPropertyEntry => {
-    const entry = rich(text, ranges, grey);
-    let foreground: string = palette.secondary;
-    if (active) foreground = palette.selectedFg;
-    else if (grey) foreground = palette.demoted;
-    else if (titleRow) foreground = palette.text;
-    entry.style = {fg: foreground,
-      ...(active ? {bg: palette.selectedBg} : {}), ...(titleRow && active ? {bold: true} : {})};
-    if (active && !titleRow) entry.inlineOverlays!.push({start: 0, end: utf8Length("│"), style: {fg: palette.selectedFg}, unit: "byte"});
-    return entry;
+  const directory = relative.slice(0, relative.length - basename.length);
+  let text = active ? "> " : "  ";
+  const regions: TsHighlightSpan[] = [], matches: Range[] = [];
+  const append = (value: string, fg: string, bold = false, ranges: Range[] = []) => {
+    const prefix = text.length;
+    text += value;
+    regions.push({start: utf8Length(text.substring(0, prefix)), end: utf8Length(text),
+      color: active ? palette.selectedFg : fg, bold});
+    matches.push(...ranges.map(([a, b]): Range => [prefix + a, prefix + b]));
   };
-  const ranges = matchRanges(title, s.query).map(([a, b]): Range => [a + prefix.length, b + prefix.length]);
-  let kindLabel = "text";
-  if (r.kind === "symbol") kindLabel = "symbol " + r.name;
-  else if (r.kind === "file") kindLabel = "file";
-  return {kind: "raw", entries: [row(prefix + title, ranges, true),
-    row(rail + kindLabel + " · " + location, []),
-    row(rail + (r.snippet || "[no saved snippet]"), previewMatches(r, s.query).map(([a,b]): Range => [a + rail.length, b + rail.length]))]};
+  append(fileIcon(r.path) + " ", palette.icon);
+  if (r.kind === "symbol") {
+    append(r.name, palette.symbol, true, matchRanges(r.name, s.query));
+    append(" · ", palette.secondary);
+  }
+  const identity = basename + ":" + (r.line || 1);
+  append(identity, palette.text, true, matchRanges(identity, s.query));
+  if (r.kind === "content") {
+    append(" · ", palette.secondary);
+    append(r.snippet || "[no saved snippet]", palette.text, false, previewMatches(r, s.query));
+  }
+  if (width >= 48) {
+    if (directory) append(" · " + directory, palette.secondary);
+    if (r.kind === "file") append(" · file", palette.secondary);
+  }
+  if (demoted(r.path, patterns)) append(" · generated", palette.secondary);
+  const entry = rich(text, matches, false, regions);
+  entry.style = active ? {fg: palette.selectedFg, bg: palette.selectedBg} : {fg: palette.text};
+  // Native one-row viewport clipping keeps text within cell bounds.
+  return entry;
+}
+function selectedLocation(s: State, root: string, width: number): TextPropertyEntry {
+  const r = s.results.find(r => key(r) === s.selected);
+  if (!r) return {text: "", style: {fg: palette.secondary}};
+  const basename = r.path.split("/").pop() || r.path;
+  const relative = root && r.path.startsWith(root + "/") ? r.path.slice(root.length + 1) : basename;
+  const coordinates = ":" + (r.line || 1) + ":" + (r.col || 1);
+  return {text: (width < 48 ? basename + coordinates + " · " : "") + relative + coordinates,
+    style: {fg: palette.secondary}};
 }
 function statusFooter(s: State, preview: TextPropertyEntry[], notice: string): TextPropertyEntry {
   const safety = [notice, ...preview.map(p => p.text), ...s.errors, ...s.warnings.map(w => "Incomplete: " + w)].filter(Boolean);
   const status = [...safety, s.results.length + " results"].join(" · ").replace(/[\r\n]/g, " ");
   const footer = rich(status);
-  footer.style = {fg: palette.secondary};
+  footer.style = {fg: palette.text};
   return footer;
 }
-export function spec(s: State, patterns: string[], preview: TextPropertyEntry[], notice: string, root = "", height = 19, phase = 0): unknown {
-  const itemSpecs = s.results.map(r => resultCard(s, r, patterns, root));
+export function spec(s: State, patterns: string[], preview: TextPropertyEntry[], notice: string, root = "", height = 19, phase = 0, width = 52): unknown {
+  const items = s.results.map(r => resultRow(s, r, patterns, root, width));
   const selected = Math.max(0, s.results.findIndex(r => key(r) === s.selected));
-  const footer = statusFooter(s, preview, notice);
-  const resultsLabel = s.pending ? "Results · " + loadingFrame(phase) + " Searching" : "Results";
   const tiny = height < 9;
+  const grep = {kind: "toggle", key: "grep", label: "Grep", checked: s.mode === "grep", focused: false};
+  const hints = {kind: "hintBar", entries: [{keys: "↑/↓", label: width < 48 ? "" : "select"},
+    {keys: "Tab", label: width < 48 ? "" : "Grep"},
+    {keys: "Enter", label: width < 48 ? "" : s.mode === "grep" && !s.armed ? "run grep" : "open"},
+    {keys: "Esc", label: width < 48 ? "" : "close"}]};
+  const header = rich("Results · " + s.results.length + (s.pending ? " · Searching " + loadingFrame(phase) : ""));
+  header.style = {fg: palette.accent};
   return {kind: "col", children: [
-    ...(!tiny ? [{kind: "raw", entries: [{text: "SEARCH EVERYWHERE", style: {fg: palette.accent, bold: true}}]}] : []),
     {kind: "text", key: "query", label: "Query", value: s.query, focused: true, rows: 1, fullWidth: true},
-    ...(!tiny ? [{kind: "toggle", key: "grep", label: "Grep (Enter to search disk)", checked: s.mode === "grep", focused: false}] : []),
-    {kind: "labeledSection", label: resultsLabel, child: {kind: "list", key: "results",
-      items: [], itemSpecs, itemKeys: s.results.map(key), selectedIndex: selected, visibleRows: Math.max(1, height - (tiny ? 5 : 7)), focusable: false}},
-    {kind: "raw", entries: [footer]},
-    ...(!tiny ? [{kind: "hintBar", entries: [{keys: "↑/↓", label: "select"}, {keys: "Tab", label: "Grep toggle"},
-      {keys: "Enter", label: s.mode === "grep" && !s.armed ? "run grep" : "open"}, {keys: "Esc", label: "close"}]}] : [])
+    ...(!tiny ? [grep] : []),
+    {kind: "raw", key: "results-status", entries: [header]},
+    {kind: "list", key: "results", items, itemKeys: s.results.map(key), selectedIndex: selected,
+      visibleRows: Math.max(1, height - (tiny ? 5 : 6)), focusable: false},
+    {kind: "raw", key: "selected-location", entries: [selectedLocation(s, root, width)]},
+    {kind: "raw", entries: [statusFooter(s, preview, notice)]},
+    tiny ? {kind: "row", wrap: false, children: [grep, width < 48
+      ? {kind: "raw", entries: [{text: " ↑↓ Tab ↵ Esc", style: {fg: palette.accent}}]} : hints]} : hints,
   ]};
 }
