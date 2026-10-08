@@ -136,15 +136,47 @@ def cell_proof(screen, name):
     cells = [screen.buffer[y][c] for c in range(x,x+len(expected))]
     if not any(c.fg == '00ffff' for c in cells): raise ValueError('Native grammar foreground absent')
     hits = [dict(row=y,col=x,text=c.data,fg=c.fg,bg=c.bg,bold=c.bold)
-            for y,row in screen.buffer.items() for x,c in row.items() if c.bg == '7d550a']
-    if not hits or not all(c['bold'] for c in hits): raise ValueError('Warm RGB/bold match absent')
+            for y,row in screen.buffer.items() for x,c in row.items() if c.bg == '153c43']
+    if not hits or not all(c['bold'] for c in hits): raise ValueError('Mint RGB/bold match absent')
     if not any(c['col'] > 35 for c in hits) or not any(c['col'] < 35 for c in hits):
         raise ValueError('Native and snippet matches required')
-    if not all(c['fg'] in ('ffffff','7d7d7d') for c in hits if c['col'] < 35): raise ValueError('Left snippets must remain plain/demoted gray')
+    if not all(c['fg'] in ('f2f6fc','b6c2d2','a4acb9') for c in hits if c['col'] < 35): raise ValueError('Left snippets must remain plain secondary/demoted text')
     titles = ['Bar.kt:1','Foo.kt:1'] if is_regex else ['Foo.kt:1','build/Foo.kt:1:1']
     if not all(title in text for title in titles): raise ValueError('Basename:line evidence absent')
     if is_regex and 'Bar.kt (preview)' not in text: raise ValueError('Native preview tab absent')
     return dict(phase=name, hits=hits, native_cells=[dict(text=c.data,fg=c.fg,bg=c.bg,bold=c.bold) for c in cells])
+
+
+def spinner_proof(screen, renderer, base, name):
+    from wcwidth import wcswidth
+    candidates = [(y, row.index(' Searching')-1) for y,row in enumerate(screen.display) if ' Searching' in row]
+    if len(candidates) != 1: raise ValueError('Single native footer spinner required')
+    y,x = candidates[0]; cell = screen.buffer[y][x]; char = cell.data
+    if wcswidth(char) != 1 or char not in '◜◝◞◟⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏|/-\\':
+        raise ValueError('Unsupported/non-single-cell native spinner')
+    if cell.bold or cell.fg != '8eb9b3': raise ValueError('Quiet spinner style mismatch')
+    for candidate in '◜◝◞◟':
+        candidate_mask = renderer.fonts[0].getmask(candidate)
+        missing_mask = renderer.fonts[0].getmask(chr(0x10ffff))
+        if wcswidth(candidate) != 1 or not candidate_mask.getbbox() or (candidate_mask.size,bytes(candidate_mask)) == (missing_mask.size,bytes(missing_mask)):
+            raise ValueError('Rotating arc font coverage/width missing')
+    font = renderer.icon(char) if pua(char) else renderer.fonts[0]
+    mask, missing = font.getmask(char), font.getmask(chr(0x10ffff))
+    if not mask.getbbox() or (mask.size,bytes(mask)) == (missing.size,bytes(missing)):
+        raise ValueError('Native spinner capture glyph lacks font coverage')
+    image = renderer.image(screen); image.save(base/(name+'.png'))
+    tile = image.crop((x*11,y*24,(x+1)*11,(y+1)*24))
+    bg = tuple(int(cell.bg[i:i+2],16) for i in (0,2,4)) if cell.bg != 'default' else (0,0,0)
+    if not any(pixel != bg for pixel in tile.getdata()): raise ValueError('Spinner pixels absent')
+    def luminance(rgb):
+        values = [v/255 for v in rgb]
+        values = [v/12.92 if v <= .04045 else ((v+.055)/1.055)**2.4 for v in values]
+        return sum(v*w for v,w in zip(values,(.2126,.7152,.0722)))
+    fg = tuple(int(cell.fg[i:i+2],16) for i in (0,2,4))
+    contrast = (max(luminance(fg),luminance(bg))+.05)/(min(luminance(fg),luminance(bg))+.05)
+    if contrast < 4.5: raise ValueError('Spinner contrast below 4.5:1')
+    return dict(contrast_ratio=contrast,char=char,position=[y,x],width=1,fg=cell.fg,bg=cell.bg,bold=cell.bold,
+                glyph_notdef_different=True,pixel_sha256=hashlib.sha256(tile.tobytes()).hexdigest(),png_sha256=sha(base/(name+'.png')))
 
 
 def invoke(command, timeout=60):
@@ -191,8 +223,14 @@ def make(base, source, source_files):
         clips.append(dict(start=a, end=b, phases=[start,end]))
     times = [clip['start'] + i/FPS for clip in clips for i in range(int((clip['end']-clip['start'])*FPS)+1)]
     if not times or len(times) > MAX_FRAMES: raise ValueError('Frame/duration cap exceeded')
+    native_sources = json.loads((base/'native-source-manifest.json').read_text())
+    production = {name: sha(source/name) for name in source_files if name.endswith('.ts') and '/tests/' not in name}
+    if len(production) != 8 or production != {name: row['source_sha256'] for name,row in native_sources.items()}:
+        raise ValueError('Exact eight-production-file native provenance mismatch')
+    if any(row['copy_sha256'] != row['source_sha256'] for row in native_sources.values() if not row['instrumented']):
+        raise ValueError('Uninstrumented native source copy mismatch')
     screen = renderer.pyte.Screen(130,36); stream = renderer.pyte.ByteStream(screen)
-    index = 0; proofs = []
+    index = 0; proofs = []; spinner = []
     # Replay every skipped byte and resize before the next selected frame.
     with tempfile.TemporaryDirectory(prefix='demo-frames-', dir=base) as temp:
         for number, timestamp in enumerate(times):
@@ -203,11 +241,15 @@ def make(base, source, source_files):
                 elif event['type'] == 'phase' and event['name'] in ('native bind; live files and fake LSP', 'full nonliteral callback override'):
                     proofs.append(cell_proof(screen,event['name']))
                     renderer.image(screen).save(base/('demo-foo-proof.png' if event['name'].startswith('native bind') else 'demo-regex-proof.png'))
+                if event['type'] == 'phase' and event['name'] in ('demo-spinner-a','demo-spinner-b'):
+                    spinner.append(spinner_proof(screen, renderer, base, event['name']))
                 index += 1
             image = renderer.image(screen)
             image.save(Path(temp) / f'{number:04d}.png')
         # PNG is a lossless proof from the same terminal replay, not ui.json.
         image.save(base / 'demo-proof.png')
+        if len(spinner) != 2 or spinner[0]['char'] == spinner[1]['char'] or spinner[0]['position'] != spinner[1]['position']:
+            raise ValueError('Two distinct fixed-cell native spinner frames required')
         if len(proofs) != 2: raise ValueError('Required demo phases not replayed')
         target = base / 'demo.mp4'
         invoke([renderer.ffmpeg, '-hide_banner','-loglevel','error','-y','-framerate',str(FPS),'-i',str(Path(temp)/'%04d.png'),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart','-threads','2',str(target)])
@@ -228,8 +270,8 @@ def make(base, source, source_files):
                     mp4_sha256=sha(target), png_sha256=sha(base/'demo-proof.png'), frames=len(times), fps=FPS,
                     duration=len(times)/FPS, dimensions=[1430,864], codec='h264', pixel_format='yuv420p',
                     clips=clips, caps=dict(frames=MAX_FRAMES, seconds=30, ansi_bytes=MAX_ANSI, mp4_bytes=MAX_MP4, gif_bytes=MAX_GIF),
-                    fonts=renderer.font_info, glyphs=renderer.proof, highlight_cells=proofs,
-                    source_hashes={name: sha(source/name) for name in source_files},
+                    fonts=renderer.font_info, glyphs=renderer.proof, highlight_cells=proofs, spinner_cells=spinner,
+                    source_hashes={name: sha(source/name) for name in source_files}, native_sources=native_sources, production_files=8,
                     tools={name: importlib.metadata.version(name) for name in ('pyte','Pillow','wcwidth','imageio-ffmpeg')},
                     ffmpeg_version=invoke([renderer.ffmpeg,'-version']).stdout.decode().splitlines()[0], decode_metadata=meta,
                     caption='Actual native Fresh PTY; fake Kotlin LSP and custom file/content fixture providers. Not real backend acceptance.')
@@ -250,8 +292,7 @@ def readme_snapshot(path):
 def replace_readme(path, original):
     if readme_snapshot(path) != original: raise ValueError('README changed concurrently')
     text = original.decode(); a = text.index(START)+len(START); b = text.index(END)
-    block = ('\n[![Работа плагина](assets/demo.gif)](assets/demo.mp4)\n\n'
-             'GIF воспроизводится в README; нажмите для MP4. Native PTY автотеста: fake Kotlin LSP и тестовые file/content providers.\n')
+    block = '\n[![Plugin demo](assets/demo.gif)](assets/demo.mp4)\n'
     fd, temp = tempfile.mkstemp(prefix='.demo-readme-', dir=path.parent)
     try:
         with os.fdopen(fd,'wb') as stream: stream.write((text[:a]+block+text[b:]).encode())
@@ -288,9 +329,13 @@ def atomic_asset(path, data):
         if temp.exists(): temp.unlink()
 
 
-def publish(base, readme, original):
+def publish(base, readme, original, source_root=None, source_files=None):
     if readme_snapshot(readme) != original: raise ValueError('README changed concurrently')
     manifest = json.loads((base/'demo-manifest.json').read_text())
+    if source_root is not None:
+        expected = {name: sha(source_root/name) for name in source_files}
+        if expected != manifest['source_hashes']:
+            raise ValueError('Source changed since native capture')
     assets = readme.parent/'assets'
     if assets.is_symlink() or any(parent.is_symlink() for parent in assets.parents):
         raise ValueError('Asset directory symlink rejected')
@@ -306,6 +351,8 @@ def publish(base, readme, original):
     try:
         for path, content in zip(targets,data): staged.append(stage_asset(path,content))
         for path, temp in zip(targets,staged):
+            if asset_snapshot(path) != old[targets.index(path)]:
+                raise ValueError('Asset changed concurrently')
             os.replace(temp,path); changed.append(path)
         # README is the last operation that can fail on the successful path.
         replace_readme(readme,original)
@@ -313,6 +360,8 @@ def publish(base, readme, original):
         for temp in staged:
             if temp.exists(): temp.unlink()
         for path in reversed(changed):
+            if asset_snapshot(path) != data[targets.index(path)]:
+                continue  # Never roll back an independent writer's replacement.
             previous = old[targets.index(path)]
             if previous is None: path.unlink()
             else: atomic_asset(path,previous)

@@ -2,7 +2,7 @@
 Run: python3 tests/smoke.py /path/to/fresh
 No user's plugin installation/configuration is touched.
 """
-import os, pathlib, tempfile, subprocess, pty, select, time, fcntl, termios, struct, signal, json, sys
+import hashlib, os, pathlib, tempfile, subprocess, pty, select, time, fcntl, termios, struct, signal, json, sys
 source = pathlib.Path(__file__).resolve().parent.parent
 binary = sys.argv[1]
 base = pathlib.Path(tempfile.mkdtemp(prefix='fresh-search-smoke-'))
@@ -26,7 +26,8 @@ def instrument(content, old, new):
     assert old in content, ("Missing native instrumentation anchor", old)
     return content.replace(old, new)
 # Explicit files only: no repository/home/project traversal.
-for name in ['search_everywhere.ts', 'lib/config.ts', 'lib/model.ts', 'lib/providers.ts', 'lib/rank.ts', 'lib/search.ts', 'lib/ui.ts']:
+production_files = ['search_everywhere.ts', 'lib/config.ts', 'lib/model.ts', 'lib/providers.ts', 'lib/rank.ts', 'lib/search.ts', 'lib/ui.ts']
+for name in production_files:
     content=(source/name).read_text()
     if name=='search_everywhere.ts':
         # Only context getters are controlled: namespaces/buffers/flush remain actual native APIs.
@@ -42,14 +43,22 @@ for name in ['search_everywhere.ts', 'lib/config.ts', 'lib/model.ts', 'lib/provi
             '    editor.replaceFile(editor.localPath('+json.dumps(str(base/'refusal.json'))+'),JSON.stringify({status:"Search Everywhere needs a free dock; existing panel preserved"})); editor.setStatus("Search Everywhere needs a free dock; existing panel preserved"); return;')
         content=instrument(content, 'registerHandler("search_everywhere_close", () => close());', 'registerHandler("search_everywhere_close", () => close()); editor.registerCommand("Smoke No Session Close","","search_everywhere_close");')
         # Observation only in the disposable copy: same native methods/controller, no mocked routes.
-        content=instrument(content, '  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height()));',
-            '  const tree=spec(s.state, config.demotePaths, s.preview, notice, s.root, height()); editor.replaceFile(editor.localPath('+json.dumps(str(base/'ui.json'))+'),JSON.stringify({state:s.state,tree})); editor.updateFloatingWidget(PANEL,tree);')
+        content=instrument(content, '  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame));',
+            '  const tree=spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame); editor.replaceFile(editor.localPath('+json.dumps(str(base/'ui.json'))+'),JSON.stringify({state:s.state,tree})); editor.updateFloatingWidget(PANEL,tree);')
         content=instrument(content, '  const s = session;\n  if (!s || ev.panel_id',
             '  editor.replaceFile(editor.localPath('+json.dumps(str(base/'last-widget.json'))+'),JSON.stringify(ev)); const s = session;\n  if (!s || ev.panel_id')
         content=instrument(content, '  const line = text.replace', '  editor.replaceFile(editor.localPath('+json.dumps(str(base/'decoration.json'))+'),JSON.stringify({start,end,text,snippet:r.snippet,safe:safe()})); const line = text.replace')
         content=instrument(content, 'const editor = getEditor();', 'const editor = getEditor(); const originalSpawn=editor.spawnProcess.bind(editor); editor.spawnProcess=(...args)=>{editor.replaceFile(editor.localPath('+json.dumps(str(base/'spawn.json'))+'),JSON.stringify(args));return originalSpawn(...args);};')
         content=instrument(content, 's.mounted = false; editor.unmountFloatingWidget(PANEL);','s.mounted = false; editor.unmountFloatingWidget(PANEL); editor.replaceFile(editor.localPath('+json.dumps(str(base/'lifecycle.json'))+'),JSON.stringify({open:session!==null,queued:queued.size,busy:[...busy]}));')
     (plugins/name).write_text(content)
+# ui.ts resolves ../../_shared from config/fresh/plugins/lib.
+shared = c/'_shared'/'runtime_brand.ts'; shared.parent.mkdir()
+shared.write_bytes((source.parent/'_shared'/'runtime_brand.ts').read_bytes())
+native_sources = {
+    'packages/search-everywhere/' + name: dict(source_sha256=hashlib.sha256((source/name).read_bytes()).hexdigest(), copy_sha256=hashlib.sha256((plugins/name).read_bytes()).hexdigest(), instrumented=name == 'search_everywhere.ts')
+    for name in production_files}
+native_sources['packages/_shared/runtime_brand.ts'] = dict(source_sha256=hashlib.sha256((source.parent/'_shared'/'runtime_brand.ts').read_bytes()).hexdigest(), copy_sha256=hashlib.sha256(shared.read_bytes()).hexdigest(), instrumented=False)
+(base/'native-source-manifest.json').write_text(json.dumps(native_sources, indent=2)+'\n')
 fake = base/'fake_lsp.py'
 fake.write_text((source/'tests'/'fake_lsp.py').read_text())
 (c/'config.json').write_text(json.dumps({'version':2, 'check_for_updates':False, 'self_update':False,
@@ -150,6 +159,12 @@ def command(name):
         if (base/'response.json').exists() and json.loads((base/'response.json').read_text()).get('id')==request_id:
             pump(.2);return
     raise AssertionError((name,'test bridge did not respond',events()))
+def node(tree, key):
+    if tree.get('key') == key: return tree
+    for child in tree.get('children', []) + ([tree['child']] if 'child' in tree else []):
+        result = node(child, key)
+        if result is not None: return result
+    return None
 def events(): return json.loads((base/'events.json').read_text())
 def mark(name):
     command('Smoke Snapshot'); record('phase', name=name); phases.append({'phase':name,'events':events(),'ansiBytes':len(data),
@@ -186,14 +201,20 @@ try:
     command('Smoke Free Dock');free=snapshot();assert not free['dockOpen']
     command('Smoke Foreign Overlay');command('Smoke Snapshot');phases.append({'phase':'native baseline foreign overlay','ansiBytes':len(data)})
     record('phase', name='demo-foo-start')
-    keys(b'\x1bs');typed('Foo',1.2);mark('native bind; live files and fake LSP')
+    (base/'demo-lsp-delay').write_text('0.9')
+    keys(b'\x1bs');keys(b'Foo',.28)
+    assert json.loads((base/'ui.json').read_text())['state']['pending'] > 0
+    record('phase', name='demo-spinner-a')
+    pump(.19);record('phase', name='demo-spinner-b')
+    pump(1);(base/'demo-lsp-delay').unlink()
+    mark('native bind; live files and fake LSP')
     keys(b'\x1b[B');mark('demo-foo-arrow');keys(b'\x1b[A');mark('demo-foo-end')
     state=phases[-1]['ui']['state'];assert not state['pending'] and not state['errors'],state
     assert [r['kind'] for r in state['results']]==['file','symbol','file'],state
-    tree=phases[-1]['ui']['tree'];cards=tree['children'][2]['child']['itemSpecs']
-    assert cards[2]['entries'][0]['text']==' Foo.kt:1'
-    assert cards[2]['entries'][1]['text']=='file · build/Foo.kt:1:1'
-    for row in cards[2]['entries']:assert row['style']['fg']==[125,125,125]
+    tree=phases[-1]['ui']['tree'];cards=node(tree, 'results')['itemSpecs']
+    assert cards[2]['entries'][0]['text']=='   Foo.kt:1'
+    assert cards[2]['entries'][1]['text']=='  file · build/Foo.kt:1:1'
+    for row in cards[2]['entries']:assert row['style']['fg']==[164,172,185]
     snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
     assert snap['panes'][0]['x']==next(e['dockCols'] for e in events() if 'initialPanes' in e) and snap['panes'][0]['width']>65,snap
     assert snap['syntax'], 'Actual native Kotlin buffer has no syntax spans'
@@ -254,8 +275,8 @@ try:
     keys(b'\r',1);mark('full nonliteral callback override')
     assert len(phases[-1]['ui']['state']['results'])==2 and not phases[-1]['ui']['state']['errors']
     assert sum('override' in e for e in events())==1, 'same-name registration duplicated'
-    cards=phases[-1]['ui']['tree']['children'][2]['child']['itemSpecs']
-    assert cards[0]['entries'][0]['text']==' Bar.kt:1' and 'CUSTOM' not in str(cards)
+    cards=node(phases[-1]['ui']['tree'], 'results')['itemSpecs']
+    assert cards[0]['entries'][0]['text']=='>  Bar.kt:1' and 'CUSTOM' not in str(cards)
     keys(b'\x1b[Z');keys(b'\x1b[B');keys(b'\x1b[A');keys(b'\r');mark('grep native open')
     snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
     assert next(b for b in snap['buffers'] if b['id']==snap['active'])['path']==str(root/'Bar.kt'),snap

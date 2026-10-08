@@ -22,6 +22,9 @@ def respond(request):
     elif method == 'workspace/symbol':
         q = request.get('params', {}).get('query', '').lower()
         record({'event': 'begin', 'query': q, 'id': request['id']})
+        delay = log.parent / 'demo-lsp-delay'
+        if role == 'normal' and delay.exists() and q == 'foo':
+            time.sleep(float(delay.read_text()))
         if role == 'slow' and q in ('hold', 'old', 'middle', 'latest', 'reopen'):
             deadline = time.monotonic() + 15
             while not (log.parent / ('release-' + q)).exists():

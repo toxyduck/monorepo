@@ -12,6 +12,8 @@ import tempfile
 import time
 
 SOURCE = Path(__file__).resolve().parent.parent
+REPO = SOURCE.parent.parent
+SHARED = Path('packages/_shared/runtime_brand.ts')
 FRESH = Path.home()/'.local/opt/fresh/fresh'
 NODE = Path.home()/'.local/opt/fresh-node/bin/node'
 FILES = ['search_everywhere.ts', *['lib/' + n + '.ts' for n in
@@ -118,12 +120,17 @@ def main():
     original = demo.readme_snapshot(readme) if args.publish_demo else None
     base = Path(tempfile.mkdtemp(prefix='fresh-search-automation-', dir='/tmp'))
     env = isolated_env(base)
-    fixture = base / 'package'
-    fixture.mkdir()
+    fixture_repo = base / 'repo'
+    fixture = fixture_repo / 'packages/search-everywhere'
+    fixture.mkdir(parents=True)
     for name in FILES:
         dest = fixture / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(SOURCE / name, dest)
+    shared_dest = fixture_repo / SHARED
+    shared_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(REPO / SHARED, shared_dest)
+    source_files = ['packages/search-everywhere/' + name for name in FILES] + [str(SHARED)]
     checks = []
     native_log = None
     evidence = None
@@ -187,7 +194,7 @@ def main():
             checks.append(dict(name=name, status='BLOCKED', scope='smoke', detail='Fresh 0.5.2 unavailable.'))
     if evidence:
         try:
-            video = demo.make(evidence, fixture, FILES)
+            video = demo.make(evidence, fixture_repo, source_files)
             checks.append(dict(name='demo-video', status='PASS', scope='smoke', detail='Timestamped PTY replay; PNG proof, H264/GIF full decode and caps verified.',
                                gif=str(evidence/'demo.gif'), mp4=str(evidence/'demo.mp4'), manifest=str(evidence/'demo-manifest.json'), recording=str(evidence/'recording.jsonl')))
         except demo.Blocked as error:
@@ -199,7 +206,7 @@ def main():
     if args.publish_demo:
         if classification(checks, True)[0] == 'PASS' and video:
             try:
-                assets = demo.publish(evidence, readme, original)
+                assets = demo.publish(evidence, readme, original, REPO, source_files)
                 checks.append(dict(name='demo-publication', status='PASS', scope='smoke', detail=assets))
             except Exception as error:
                 checks.append(dict(name='demo-publication', status='FAIL', scope='smoke', detail=f'{type(error).__name__}: {error}'))

@@ -59,7 +59,8 @@ class DemoTests(unittest.TestCase):
             path.write_bytes(original); demo.replace_readme(path,original)
             self.assertTrue(path.read_bytes().startswith(b'outside\n'+demo.START.encode()))
             self.assertTrue(path.read_bytes().endswith(demo.END.encode()+b'\nafter\n'))
-            self.assertIn(b'](assets/demo.mp4)',path.read_bytes())
+            self.assertIn(b'[![Plugin demo](assets/demo.gif)](assets/demo.mp4)',path.read_bytes())
+            self.assertEqual(path.read_bytes(), b'outside\n'+demo.START.encode()+b'\n[![Plugin demo](assets/demo.gif)](assets/demo.mp4)\n'+demo.END.encode()+b'\nafter\n')
             link=Path(temp)/'link'; link.symlink_to(path)
             with self.assertRaises(ValueError): demo.readme_snapshot(link)
 
@@ -70,6 +71,11 @@ class DemoTests(unittest.TestCase):
             for name,data in [('demo.gif',b'gif bytes'),('demo.mp4',b'video bytes')]: (base/name).write_bytes(data)
             manifest={suffix+'_sha256':demo.sha(base/('demo.'+suffix)) for suffix in ('gif','mp4')}
             (base/'demo-manifest.json').write_text(json.dumps(manifest))
+            manifest['source_hashes'] = {'source.ts': 'stale'}
+            (base/'demo-manifest.json').write_text(json.dumps(manifest))
+            (package/'source.ts').write_text('new')
+            with self.assertRaisesRegex(ValueError,'Source changed'):
+                demo.publish(base,readme,original,package,['source.ts'])
             assets=package/'assets'; assets.mkdir()
             (assets/'demo.gif').write_bytes(b'old gif'); (assets/'demo.mp4').write_bytes(b'old video')
             (assets/'unrelated.txt').write_text('preserve')

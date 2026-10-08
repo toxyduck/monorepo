@@ -5,6 +5,7 @@ import {diskResults, grep, symbolLanguage} from "./lib/providers.ts";
 import {rank} from "./lib/rank.ts";
 import {cancellation, enterAction, initial, isCurrent, replaceResults, type State} from "./lib/search.ts";
 import {spec} from "./lib/ui.ts";
+import {BRAND_PALETTE, LOADING_STEP_MS} from "../_shared/runtime_brand.ts";
 
 const editor = getEditor();
 const PANEL = 73621, MODE = "search-everywhere";
@@ -20,6 +21,7 @@ interface Session {
   previewBusy: boolean; original: SplitSnapshot; cursor: number; ownedPreview: number | null; foreignPreview: boolean;
   mounted: boolean; jobs: Set<{deadline: number; timeout: () => void}>;
   decorated: Set<number>; namespace: string;
+  loadingTimer: number | null; loadingGeneration: number; loadingFrame: number; loadingNextAt: number;
 }
 let session: Session | null = null;
 let timer: number | null = null;
@@ -82,21 +84,46 @@ async function decorate(s: Session, r: SearchResult, id: number, alive: () => bo
   const line = text.replace(/\r$/, "");
   if (!r.snippet || line.slice(0, 600) !== r.snippet) return;
   s.decorated.add(id);
-  editor.addOverlay(id, s.namespace + ":row", start, end, {bg: [28, 38, 50], extendToLineEnd: true});
+  editor.addOverlay(id, s.namespace + ":row", start, end, {bg: BRAND_PALETTE.previewRowBg, extendToLineEnd: true});
   for (const [a, b] of previewMatches(r, s.state.query)) {
     const from = utf16ToByte(r.snippet, a), to = utf16ToByte(r.snippet, b);
     if (from !== null && to !== null && start + to <= end)
-      editor.addOverlay(id, s.namespace + ":match", start + from, start + to, {bg: [125, 85, 10], bold: true});
+      editor.addOverlay(id, s.namespace + ":match", start + from, start + to, {bg: BRAND_PALETTE.matchBg, bold: true});
   }
   await editor.flush();
   if (!safe()) clearDecorations(s);
 }
+function stopLoading(s: Session): void {
+  if (s.loadingTimer !== null) editor.clearInterval(s.loadingTimer);
+  s.loadingTimer = null; s.loadingFrame = 0; s.loadingNextAt = 0;
+}
+function syncLoading(s: Session): void {
+  if (!s.mounted || !s.state.pending) { stopLoading(s); return; }
+  if (s.loadingTimer !== null && s.loadingGeneration === s.state.generation) return;
+  stopLoading(s);
+  s.loadingGeneration = s.state.generation;
+  s.loadingNextAt = Date.now() + LOADING_STEP_MS;
+  s.loadingTimer = editor.setInterval(LOADING_STEP_MS, "search_everywhere_loading");
+}
+function loadingTick(): void {
+  const s = session;
+  // Native named callbacks may already be queued after clearInterval. The current
+  // owner's deadline also prevents an old tick from advancing a newly reset query.
+  if (!s || !s.mounted || s.loadingTimer === null || !valid(s) ||
+      !s.state.pending || s.loadingGeneration !== s.state.generation) return;
+  const now = Date.now();
+  if (now < s.loadingNextAt) return;
+  s.loadingNextAt = now + LOADING_STEP_MS;
+  s.loadingFrame++; draw(s);
+}
 function draw(s: Session): void {
   if (!valid(s)) { if (session === s) close(); return; }
+  syncLoading(s);
   const notice = [...providers.values()].some(p => p.kind === "files") ? "" : "file provider not configured";
-  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height()));
+  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame));
 }
 function invalidate(s: Session): void {
+  stopLoading(s);
   s.state.generation++;
   for (const cancel of s.cancel) cancel();
   s.cancel = []; s.jobs.clear(); s.previewToken++; clearDecorations(s);
@@ -280,7 +307,9 @@ function open(): void {
   const s: Session = {state: initial(), windowId, splitId: editor.getActiveSplitId(), root: window.root,
     authority: editor.getAuthorityLabel(), cancel: [], preview: [], previewToken: 0, previewBusy: false,
     original, cursor: editor.getPrimaryCursor()?.position || 0, ownedPreview: null,
-    foreignPreview: editor.listBuffers().some(b => b.window_id === windowId && b.is_preview), mounted: false, jobs: new Set(), decorated: new Set(), namespace: "search-everywhere:" + Date.now() + ":" + windowId + ":" + ++namespaceId};
+    foreignPreview: editor.listBuffers().some(b => b.window_id === windowId && b.is_preview), mounted: false,
+    loadingTimer: null, loadingGeneration: 0, loadingFrame: 0, loadingNextAt: 0,
+    jobs: new Set(), decorated: new Set(), namespace: "search-everywhere:" + Date.now() + ":" + windowId + ":" + ++namespaceId};
   session = s;
   s.mounted = editor.mountFloatingWidget(PANEL, spec(s.state, config.demotePaths, [], "file provider not configured", s.root, height()),
     38, 100, true, false, "Search Everywhere", true, false, MODE);
@@ -307,6 +336,7 @@ registerHandler("search_everywhere_open", open);
 registerHandler("search_everywhere_enter", enter);
 registerHandler("search_everywhere_close", () => close());
 registerHandler("search_everywhere_cleanup", retryDecorations);
+registerHandler("search_everywhere_loading", loadingTick);
 registerHandler("search_everywhere_tick", () => {
   const s = session;
   if (!s) return;

@@ -5,6 +5,7 @@ import {rank, demoted, defaultDemotePaths} from "../lib/rank.ts";
 import {parseRg, parseSymbols, symbolLanguage, grep, diskResults} from "../lib/providers.ts";
 import {initial, replaceResults, enterAction, cancellation, isCurrent} from "../lib/search.ts";
 import {rich, spec} from "../lib/ui.ts";
+import {BRAND_PALETTE, LOADING_FRAMES, LOADING_STEP_MS, loadingFrame} from "../../_shared/runtime_brand.ts";
 import {configure, defaults, validateProvider} from "../lib/config.ts";
 const file = {kind: "file" as const, path: "/root/Foo.kt", name: "Foo"};
 test("ordinary band precedes demoted without exclusion; file above equal symbol", () => {
@@ -113,12 +114,12 @@ test("candidate cap is explicit; display cap applies after available candidate r
 test("filename headlines and whole demoted cards, validated configuration", () => {
   const s = initial(); replaceResults(s, [{...file, path: '/root/build/Foo.kt', snippet: 'class Foo {}'}]);
   const tree = spec(s, defaultDemotePaths, [], 'file provider not configured', '/root') as any;
-  const card = tree.children[2].child.itemSpecs[0];
+  const card = tree.children.find((c:any)=>c.kind==='labeledSection').child.itemSpecs[0];
   assert.equal(card.entries.length, 3);
-  for (const row of card.entries) assert.deepEqual(row.style.fg, [125,125,125]);
-  assert.equal(card.entries[0].text, ' Foo.kt:1');
-  assert.equal(card.entries[1].text, 'file · build/Foo.kt:1:1');
-  assert(card.entries[0].text.startsWith(''));
+  for (const row of card.entries) assert.deepEqual(row.style.fg, BRAND_PALETTE.demoted);
+  assert.equal(card.entries[0].text, '>  Foo.kt:1');
+  assert.equal(card.entries[1].text, '│ file · build/Foo.kt:1:1');
+  assert(card.entries[0].text.startsWith('> '));
   assert.throws(() => configure(defaults(), {maxResults: 999}));
   assert.throws(() => configure(defaults(), {openShortcut: 'x'} as any));
   assert.throws(() => validateProvider({name: 'x', kind: 'files', search: 'bad'} as any));
@@ -138,10 +139,10 @@ test("native match metadata: exact saved CRLF line, UTF8, clipping and no invent
 });
 test("height budget shrinks and restores without changing result selection", () => {
   const s=initial();replaceResults(s,[file]);const selected=s.selected;
-  for(const height of [34,16,4,34]) {
+  for(const height of [36,18,6,36]) {
     const tree=spec(s,[],[],"","/root",height) as any;
     const list=tree.children.find((c:any)=>c.kind==='labeledSection').child;
-    assert.equal(list.visibleRows,Math.max(1,height-(height<9?4:6)));
+    assert.equal(list.visibleRows,Math.max(1,height-(height<9?5:7)));
     assert.equal(s.selected,selected);
     assert.equal(tree.children.some((c:any)=>c.kind==='hintBar'),height>=9);
   }
@@ -166,9 +167,10 @@ test("closed sessions defer only owned namespaces until matching window and auth
   };
   const code = section('let session:', 'function valid(') +
     section('function clearDecorations(', 'async function decorate') +
+    section('function stopLoading(', 'function draw(') +
     section('function invalidate(', 'function dirty(') + `
     const s = {windowId:1,root:'/root',authority:'local',namespace:'old',decorated:new Set([17,99]),
-      state:{generation:0},cancel:[],jobs:new Set(),previewToken:0,mounted:false};
+      state:{generation:0},cancel:[],jobs:new Set(),previewToken:0,mounted:false,loadingTimer:null};
     session=s; close();
     globalThis.fixture={s,retryDecorations,pendingDecorations,getSession:()=>session};`;
   const context: any = {editor};
@@ -205,9 +207,66 @@ test("literal saved snippet display shares ranges; every kind has filename:line 
     savedLocation({...file,kind:'symbol',line:1,col:7},'class Foo {}')!,
     savedLocation({...file,kind:'content',name:'CUSTOM',line:1,col:7,snippet:'class Foo {}',matches:{snippet:[[6,9]]}},'class Foo {}')!]);
   const selected=s.selected;
-  const cards=(spec(s,[],[],'','/root') as any).children[2].child.itemSpecs;
-  assert.deepEqual(cards.map((c:any)=>c.entries[0].text),Array(3).fill(' Foo.kt:1'));
-  assert.deepEqual(cards.map((c:any)=>c.entries[1].text),['file · Foo.kt:1:1','symbol Foo · Foo.kt:1:7','text · Foo.kt:1:7']);
-  for (const c of cards) assert.deepEqual(c.entries[2].inlineOverlays,[{start:6,end:9,style:{bold:true,bg:[125,85,10]},unit:'byte'}]);
+  const cards=(spec(s,[],[],'','/root') as any).children.find((c:any)=>c.kind==='labeledSection').child.itemSpecs;
+  assert.deepEqual(cards.map((c:any)=>c.entries[0].text),['>  Foo.kt:1','   Foo.kt:1','   Foo.kt:1']);
+  assert.deepEqual(cards.map((c:any)=>c.entries[1].text),['│ file · Foo.kt:1:1','  symbol Foo · Foo.kt:1:7','  text · Foo.kt:1:7']);
+  for (const c of cards) assert.deepEqual(c.entries[2].inlineOverlays[0],{start:c.entries[2].text.startsWith('│')?10:8,end:c.entries[2].text.startsWith('│')?13:11,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
   assert.equal(s.selected,selected);
+});
+
+test("shared loading frames wrap in one scalar; footer keeps safety before active loader", () => {
+  assert.equal(LOADING_STEP_MS,150);
+  assert.deepEqual(LOADING_FRAMES,['◜','◝','◞','◟']);
+  for (const phase of [-5,-1,0,1,3,4,9]) {
+    assert.equal([...loadingFrame(phase)].length,1);
+    assert.equal(loadingFrame(phase),loadingFrame(phase+4));
+  }
+  const s=initial();s.pending=1;s.errors=['Refused'];s.warnings=['partial'];
+  const footer=(phase:number)=>(spec(s,[],[],'','/root',18,phase) as any).children.filter((c:any)=>c.kind==='raw').at(-1).entries[0];
+  const a=footer(0),b=footer(1);
+  assert.equal([...a.text].length,[...b.text].length);
+  assert(a.text.startsWith('Refused · Incomplete: partial'));
+  assert(a.text.endsWith('◜ Searching'));assert(b.text.endsWith('◝ Searching'));
+  assert.deepEqual(a.inlineOverlays.at(-1).style,{fg:BRAND_PALETTE.loadingAccent});
+  s.pending=0;assert(!footer(2).text.includes('Searching'));assert.equal(footer(2).inlineOverlays.length,0);
+});
+
+test("selected three-row palette and literal/regex Unicode offsets use actual prefixes", () => {
+  const s=initial();s.query='needle';
+  const snippet='é😀needle';
+  replaceResults(s,[{...file,path:'/root/é😀needle.kt',snippet},
+    {...file,path:'/root/build/é😀needle.kt',kind:'content',snippet,matches:{snippet:[[3,9]]}}]);
+  const cards=()=> (spec(s,defaultDemotePaths,[],'','/root') as any).children.find((c:any)=>c.kind==='labeledSection').child.itemSpecs;
+  let rows=cards()[0].entries;
+  for(const row of rows) assert.deepEqual(row.style.bg,BRAND_PALETTE.selectedBg);
+  assert.deepEqual(rows[0].style.fg,BRAND_PALETTE.text);assert.equal(rows[0].style.bold,true);
+  assert.deepEqual(rows[1].style.fg,BRAND_PALETTE.secondary);
+  assert.deepEqual(rows[0].inlineOverlays[0],{start:12,end:18,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
+  assert.deepEqual(rows[2].inlineOverlays[0],{start:10,end:16,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
+  s.selected=key(s.results[1]);s.query='n.*e';rows=cards()[1].entries;
+  for(const row of rows) {assert.deepEqual(row.style.bg,BRAND_PALETTE.selectedBg);assert.deepEqual(row.style.fg,BRAND_PALETTE.demoted);}
+  assert.deepEqual(rows[2].inlineOverlays[0],{start:10,end:16,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
+  assert.deepEqual(rows[2].inlineOverlays.at(-1).style,{fg:BRAND_PALETTE.accent});
+});
+
+test("loader owns pending generation, resets deadlines and never dispatches search or preview", async () => {
+  const {readFileSync}=await import('node:fs');const {stripTypeScriptTypes}=await import('node:module');
+  const {runInNewContext}=await import('node:vm');
+  const source=readFileSync(new URL('../search_everywhere.ts',import.meta.url),'utf8');
+  const code=source.slice(source.indexOf('function stopLoading('),source.indexOf('function draw('));
+  let now=1000,id=0,draws=0;const active=new Map<number,string>();
+  const context:any={LOADING_STEP_MS,Date:{now:()=>now},valid:(s:any)=>context.session===s,
+    draw:()=>draws++,editor:{setInterval:(ms:number,name:string)=>{assert.equal(ms,150);active.set(++id,name);return id;},clearInterval:(id:number)=>active.delete(id)}};
+  runInNewContext(stripTypeScriptTypes(code),context);
+  const s={mounted:true,state:{pending:1,generation:1},loadingTimer:null,loadingGeneration:0,loadingFrame:0,loadingNextAt:0};
+  context.session=s;context.syncLoading(s);context.syncLoading(s);assert.equal(active.size,1);
+  context.loadingTick();assert.equal(draws,0);now=1150;context.loadingTick();assert.equal(s.loadingFrame,1);assert.equal(draws,1);
+  context.loadingTick();assert.equal(draws,1);
+  context.stopLoading(s);s.state.generation++;now=1200;context.syncLoading(s);
+  assert.equal(s.loadingFrame,0);context.loadingTick();assert.equal(draws,1);assert.equal(s.loadingNextAt,1350);
+  now=1350;context.loadingTick();assert.equal(draws,2);
+  s.state.pending=0;context.syncLoading(s);assert.equal(active.size,0);context.loadingTick();assert.equal(draws,2);
+  s.state.pending=1;context.syncLoading(s);context.stopLoading(s);context.session=null;now=2000;context.loadingTick();assert.equal(draws,2);
+  const next={...s,state:{pending:1,generation:3},loadingTimer:null};context.session=next;context.syncLoading(next);
+  context.loadingTick();assert.equal(draws,2);assert.equal(next.loadingFrame,0);assert.equal(active.size,1);
 });
