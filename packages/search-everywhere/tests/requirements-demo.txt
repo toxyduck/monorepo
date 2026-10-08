@@ -1,0 +1,4 @@
+pyte==0.8.2
+Pillow==12.3.0
+wcwidth==0.9.1
+imageio-ffmpeg==0.6.0
