@@ -2,6 +2,10 @@
 [![Plugin demo](assets/demo.gif)](assets/demo.mp4)
 <!-- demo-video:end -->
 
-In Fresh 0.5.2+, run **Package: Install from URL**.
-`https://github.com/toxyduck/monorepo#packages/search-everywhere/dist`
-Restart Fresh, then run **Search Everywhere**.
+After installing the package, add this Ctrl+Alt+Space binding to `~/.config/fresh/config.json`:
+
+```json
+{
+  "keybindings": [{"key": "Space", "modifiers": ["ctrl", "alt"], "action": "search_everywhere_open"}]
+}
+```
