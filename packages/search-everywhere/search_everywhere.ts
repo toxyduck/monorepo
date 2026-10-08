@@ -170,8 +170,29 @@ function preview(s: Session): void {
   if (s.foreignPreview) { s.preview = [{text: "Existing preview preserved; Enter opens selected file"}]; draw(s); return; }
   if (s.previewBusy) return;
   s.previewBusy = true;
+  runPreview(s, r, token).catch(e => editor.setStatus(String(e)));
+}
+async function disposeOrphanPreview(s: Session, created: BufferInfo | undefined): Promise<void> {
+  // Esc may restore the pane before ownership is observed. Dispose only a new
+  // transient orphan; never restore an old layout after a replacement session opens.
+  if (!created || editor.activeWindow() !== s.windowId || editor.getAuthorityLabel() !== s.authority) return;
+  const current = editor.getBufferInfo(created.id);
+  const replacement = session;
+  const selected = replacement && replacement.state.results.find(v => key(v) === replacement.state.selected);
+  if (!current?.is_preview || current.modified || current.splits.length ||
+      editor.listSplits().some(p => p.bufferId === current.id) ||
+      replacement?.original.bufferId === current.id || selected?.path === current.path) return;
+  editor.closeBuffer(current.id);
+  await editor.flush();
+  const next = session;
+  if (next && valid(next)) {
+    next.foreignPreview = editor.listBuffers().some(b => b.window_id === next.windowId && b.is_preview && b.id !== next.ownedPreview);
+    preview(next);
+  }
+}
+async function runPreview(s: Session, r: SearchResult, token: number): Promise<void> {
   const alive = () => valid(s) && token === s.previewToken;
-  (async () => {
+  try {
     // Flush before dispatch: stale callbacks must never open after teardown.
     await editor.flush();
     if (!alive()) return;
@@ -188,25 +209,7 @@ function preview(s: Session): void {
     const buffer = pane && editor.getBufferInfo(pane.bufferId);
     if (buffer?.path === r.path && buffer.is_preview) s.ownedPreview = buffer.id;
     if (!alive()) {
-      if (session !== s) {
-        // Esc may already have restored the pane before ownership was observed.
-        // Only dispose the newly created, still-transient orphan; never restore an old layout here.
-        if (created && editor.activeWindow() === s.windowId && editor.getAuthorityLabel() === s.authority) {
-          const current = editor.getBufferInfo(created.id);
-          const selected = session?.state.results.find(v => key(v) === session!.state.selected);
-          if (current?.is_preview && !current.modified && !current.splits.length &&
-              !editor.listSplits().some(p => p.bufferId === current.id) &&
-              session?.original.bufferId !== current.id && selected?.path !== current.path) {
-            editor.closeBuffer(current.id);
-            await editor.flush();
-            const next = session;
-            if (next && valid(next)) {
-              next.foreignPreview = editor.listBuffers().some(b => b.window_id === next.windowId && b.is_preview && b.id !== next.ownedPreview);
-              preview(next);
-            }
-          }
-        }
-      }
+      if (session !== s) await disposeOrphanPreview(s, created);
       return;
     }
     if (dirty(s, r.path)) { dismissOwned(s); s.preview = [{text: "Unsaved edits: preview unavailable"}]; }
@@ -215,9 +218,16 @@ function preview(s: Session): void {
       if (buffer?.path === r.path) await decorate(s, r, buffer.id, alive);
     }
     if (alive()) draw(s);
-  })().catch(e => { if (alive()) { clearDecorations(s); s.preview = [{text: "Preview error: " + String(e)}]; draw(s); } })
-    .finally(() => { s.previewBusy = false; if (valid(s) && token !== s.previewToken) preview(s); })
-    .catch(e => editor.setStatus(String(e)));
+  } catch (error) {
+    if (alive()) {
+      clearDecorations(s);
+      s.preview = [{text: "Preview error: " + String(error)}];
+      draw(s);
+    }
+  } finally {
+    s.previewBusy = false;
+    if (valid(s) && token !== s.previewToken) preview(s);
+  }
 }
 function selectedResults(s: Session, results: SearchResult[]): void {
   const before = s.state.selected;
@@ -230,7 +240,7 @@ function launch(s: Session, p: Provider, merge: SearchResult[], jobKey = JSON.st
   const generation = s.state.generation;
   const c = cancellation(s.root, s.windowId, s.state.query, Math.min(800, config.maxResults * 4), message => {
     if (valid(s) && s.state.generation === generation && !c.ctx.cancelled) s.state.warnings.push(p.name + ": " + message);
-  });
+  }, error => editor.setStatus(p.name + ": cancellation callback failed: " + String(error)));
   s.cancel.push(c.cancel); s.state.pending++;
   let finished = false;
   const job = {deadline: Date.now() + config.timeoutMs, timeout: () => { c.cancel(); finish(undefined, "timeout (cancel requested)"); }};
@@ -248,20 +258,28 @@ function launch(s: Session, p: Provider, merge: SearchResult[], jobKey = JSON.st
   const start = () => {
     if (!valid(s) || c.ctx.cancelled || s.state.generation !== generation) return;
     busy.add(jobKey);
-    // Every detached path is caught; callbacks supplied by init stay real functions.
-    Promise.resolve().then(() => p.search(c.ctx.query, c.ctx)).then(async values => {
-    if (!isCurrent(s.state, generation, c.ctx) || !valid(s)) return;
-    const disk = await diskResults(editor, values, c.ctx);
-    if (isCurrent(s.state, generation, c.ctx) && valid(s)) {
-      s.state.errors.push(...disk.errors.map(e => p.name + ": " + e));
-      s.state.warnings.push(...new Set(disk.warnings.map(w => p.name + ": " + w)));
-      finish(disk.results);
+    // Logical finish may happen at timeout; occupancy ends only at real settlement.
+    async function execute(): Promise<void> {
+      try {
+        const values = await p.search(c.ctx.query, c.ctx);
+        if (!isCurrent(s.state, generation, c.ctx) || !valid(s)) return;
+        const disk = await diskResults(editor, values, c.ctx);
+        if (!isCurrent(s.state, generation, c.ctx) || !valid(s)) return;
+        s.state.errors.push(...disk.errors.map(e => p.name + ": " + e));
+        s.state.warnings.push(...new Set(disk.warnings.map(w => p.name + ": " + w)));
+        finish(disk.results);
+      } catch (error) {
+        finish(undefined, String(error));
+      } finally {
+        busy.delete(jobKey);
+        if (!finished) finish();
+        const next = queued.get(jobKey);
+        queued.delete(jobKey);
+        if (next) next();
+      }
     }
-  }).catch(e => finish(undefined, String(e))).finally(() => {
-    busy.delete(jobKey);
-    if (!finished) finish();
-    const next = queued.get(jobKey); queued.delete(jobKey); if (next) next();
-  }).catch(e => editor.setStatus(String(e)));
+    // Preserve deferred dispatch and catch every detached host callback path.
+    Promise.resolve().then(execute).catch(e => editor.setStatus(String(e)));
   };
   c.ctx.onCancel(() => { if (queued.get(jobKey) === start) queued.delete(jobKey); });
   if (busy.has(jobKey)) queued.set(jobKey, start); else start();

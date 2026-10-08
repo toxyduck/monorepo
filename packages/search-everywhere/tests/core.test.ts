@@ -116,7 +116,10 @@ test("filename headlines and whole demoted cards, validated configuration", () =
   const tree = spec(s, defaultDemotePaths, [], 'file provider not configured', '/root') as any;
   const card = tree.children.find((c:any)=>c.kind==='labeledSection').child.itemSpecs[0];
   assert.equal(card.entries.length, 3);
-  for (const row of card.entries) assert.deepEqual(row.style.fg, BRAND_PALETTE.demoted);
+  for (const row of card.entries) assert.equal(row.style.fg, BRAND_PALETTE.selectedFg);
+  s.selected = null;
+  const demotedCard = (spec(s, defaultDemotePaths, [], "", "/root") as any).children.find((c:any) => c.kind === "labeledSection").child.itemSpecs[0];
+  for (const row of demotedCard.entries) assert.equal(row.style.fg, BRAND_PALETTE.demoted);
   assert.equal(card.entries[0].text, '>  Foo.kt:1');
   assert.equal(card.entries[1].text, '│ file · build/Foo.kt:1:1');
   assert(card.entries[0].text.startsWith('> '));
@@ -148,50 +151,6 @@ test("height budget shrinks and restores without changing result selection", () 
   }
 });
 
-test("closed sessions defer only owned namespaces until matching window and authority return", async () => {
-  const {readFileSync} = await import('node:fs');
-  const {stripTypeScriptTypes} = await import('node:module');
-  const {runInNewContext} = await import('node:vm');
-  const source = readFileSync(new URL('../search_everywhere.ts', import.meta.url), 'utf8');
-  const section = (from: string, to: string) => source.slice(source.indexOf(from), source.indexOf(to));
-  let windowId = 2, authority = 'local';
-  let windows = [{id: 1, root: '/root'}, {id: 2, root: '/other'}];
-  const calls: unknown[] = [], intervals = new Map<number, string>();
-  const buffers = new Map([[17, {window_id: 1}], [18, {window_id: 2}]]);
-  const editor = {
-    activeWindow: () => windowId, getAuthorityLabel: () => authority, listWindows: () => windows,
-    getBufferInfo: (id: number) => { calls.push(['info', id]); return buffers.get(id); },
-    clearNamespace: (id: number, ns: string) => calls.push([id, ns]),
-    setInterval: (_ms: number, name: string) => { intervals.set(1, name); return 1; },
-    clearInterval: (id: number) => intervals.delete(id),
-  };
-  const code = section('let session:', 'function valid(') +
-    section('function clearDecorations(', 'async function decorate') +
-    section('function stopLoading(', 'function draw(') +
-    section('function invalidate(', 'function dirty(') + `
-    const s = {windowId:1,root:'/root',authority:'local',namespace:'old',decorated:new Set([17,99]),
-      state:{generation:0},cancel:[],jobs:new Set(),previewToken:0,mounted:false,loadingTimer:null};
-    session=s; close();
-    globalThis.fixture={s,retryDecorations,pendingDecorations,getSession:()=>session};`;
-  const context: any = {editor};
-  runInNewContext(stripTypeScriptTypes(code), context);
-  const f = context.fixture;
-  assert.equal(f.getSession(), null); assert.equal(f.pendingDecorations.size, 1);
-  assert.deepEqual(calls, []); assert.equal(intervals.size, 1);
-  windowId = 1; authority = 'remote'; windows = [];
-  f.retryDecorations(); assert.deepEqual(calls, []); assert.equal(f.pendingDecorations.size, 1);
-  authority = 'local'; windows = [{id: 1, root: '/root'}];
-  f.retryDecorations();
-  assert.deepEqual(calls, [['info',17],[17,'old:row'],[17,'old:match'],['info',99]]);
-  assert.equal(f.pendingDecorations.size, 0); assert.equal(intervals.size, 0);
-  // A live ID belonging to another window cannot be cleared; absence is proved only in the same authority.
-  f.s.decorated.add(18); context.fixture.s.namespace = 'next';
-  runInNewContext('clearDecorations(fixture.s)', context);
-  assert.equal(f.pendingDecorations.size, 1);
-  assert(!calls.some(c => Array.isArray(c) && c[0] === 18));
-  windows = []; f.retryDecorations();
-  assert.equal(f.pendingDecorations.size, 0); assert.equal(intervals.size, 0);
-});
 
 
 test("literal saved snippet display shares ranges; every kind has filename:line headline", () => {
@@ -214,11 +173,16 @@ test("literal saved snippet display shares ranges; every kind has filename:line 
   assert.equal(s.selected,selected);
 });
 
-test("shared loading frames wrap in one scalar; footer keeps safety before active loader", () => {
-  assert.equal(LOADING_STEP_MS,150);
-  assert.deepEqual(LOADING_FRAMES,['◜','◝','◞','◟']);
+test("shared three-cell pulse stays near Results; footer keeps safety and counts", () => {
+  assert.deepEqual(BRAND_PALETTE, {
+    accent:'ui.help_key_fg', text:'ui.popup_text_fg', secondary:'ui.popup_text_fg',
+    demoted:'editor.line_number_fg', selectedBg:'ui.popup_selection_bg', selectedFg:'ui.popup_selection_fg',
+    previewRowBg:'editor.current_line_bg', matchBg:'search.match_bg', loadingAccent:'ui.help_key_fg',
+  });
+  assert.equal(LOADING_STEP_MS,180);
+  assert.deepEqual(LOADING_FRAMES,['•··','·•·','··•','·•·']);
   for (const phase of [-5,-1,0,1,3,4,9]) {
-    assert.equal([...loadingFrame(phase)].length,1);
+    assert.equal([...loadingFrame(phase)].length,3);
     assert.equal(loadingFrame(phase),loadingFrame(phase+4));
   }
   const s=initial();s.pending=1;s.errors=['Refused'];s.warnings=['partial'];
@@ -226,8 +190,10 @@ test("shared loading frames wrap in one scalar; footer keeps safety before activ
   const a=footer(0),b=footer(1);
   assert.equal([...a.text].length,[...b.text].length);
   assert(a.text.startsWith('Refused · Incomplete: partial'));
-  assert(a.text.endsWith('◜ Searching'));assert(b.text.endsWith('◝ Searching'));
-  assert.deepEqual(a.inlineOverlays.at(-1).style,{fg:BRAND_PALETTE.loadingAccent});
+  assert.equal(a.text, b.text);
+  const label = (phase:number) => (spec(s,[],[],'','/root',18,phase) as any).children.find((c:any)=>c.kind==='labeledSection').label;
+  assert.equal(label(0), 'Results · •·· Searching');
+  assert.equal(label(1), 'Results · ·•· Searching');
   s.pending=0;assert(!footer(2).text.includes('Searching'));assert.equal(footer(2).inlineOverlays.length,0);
 });
 
@@ -239,34 +205,135 @@ test("selected three-row palette and literal/regex Unicode offsets use actual pr
   const cards=()=> (spec(s,defaultDemotePaths,[],'','/root') as any).children.find((c:any)=>c.kind==='labeledSection').child.itemSpecs;
   let rows=cards()[0].entries;
   for(const row of rows) assert.deepEqual(row.style.bg,BRAND_PALETTE.selectedBg);
-  assert.deepEqual(rows[0].style.fg,BRAND_PALETTE.text);assert.equal(rows[0].style.bold,true);
-  assert.deepEqual(rows[1].style.fg,BRAND_PALETTE.secondary);
+  assert.deepEqual(rows[0].style.fg,BRAND_PALETTE.selectedFg);assert.equal(rows[0].style.bold,true);
+  assert.deepEqual(rows[1].style.fg,BRAND_PALETTE.selectedFg);
   assert.deepEqual(rows[0].inlineOverlays[0],{start:12,end:18,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
   assert.deepEqual(rows[2].inlineOverlays[0],{start:10,end:16,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
   s.selected=key(s.results[1]);s.query='n.*e';rows=cards()[1].entries;
-  for(const row of rows) {assert.deepEqual(row.style.bg,BRAND_PALETTE.selectedBg);assert.deepEqual(row.style.fg,BRAND_PALETTE.demoted);}
+  for(const row of rows) {assert.deepEqual(row.style.bg,BRAND_PALETTE.selectedBg);assert.deepEqual(row.style.fg,BRAND_PALETTE.selectedFg);}
   assert.deepEqual(rows[2].inlineOverlays[0],{start:10,end:16,style:{bold:true,bg:BRAND_PALETTE.matchBg},unit:'byte'});
-  assert.deepEqual(rows[2].inlineOverlays.at(-1).style,{fg:BRAND_PALETTE.accent});
+  assert.deepEqual(rows[2].inlineOverlays.at(-1).style,{fg:BRAND_PALETTE.selectedFg});
+});
+
+// Load the entire entry with its real imported functions and native named handlers.
+async function entryFixture() {
+  const {readFileSync} = await import('node:fs');
+  const {stripTypeScriptTypes} = await import('node:module');
+  const {runInNewContext} = await import('node:vm');
+  const source = readFileSync(new URL('../search_everywhere.ts', import.meta.url), 'utf8');
+  const handlers = new Map<string, (...args:any[]) => any>();
+  const intervals = new Map<number, {ms:number; name:string}>();
+  const calls:any[] = [];
+  let now = 1000, id = 0, windowId = 1, authority = 'local', api:any, widget:any;
+  let windows = [{id:1,root:'/root'}, {id:2,root:'/other'}];
+  let buffers:any[] = [{id:1,window_id:1,path:'/root/original.kt',modified:false,is_preview:false,splits:[1]}];
+  let splits:any[] = [{splitId:1,bufferId:1,y:0,height:18,viewport:{topByte:7}}];
+  const editor:any = {
+    activeWindow:()=>windowId, getAuthorityLabel:()=>authority, listWindows:()=>windows,
+    listBuffers:()=>buffers, listSplits:()=>splits, getActiveSplitId:()=>1,
+    getActiveBufferId:()=>splits[0].bufferId, getBufferInfo:(id:number)=>buffers.find(b=>b.id===id),
+    getPrimaryCursor:()=>({position:3}), dockOpen:()=>false,
+    mountFloatingWidget:(_id:number, tree:any)=>{widget=tree;return true;},
+    updateFloatingWidget:(_id:number, tree:any)=>{widget=tree;calls.push(['draw']);},
+    unmountFloatingWidget:()=>calls.push(['unmount']),
+    setInterval:(ms:number,name:string)=>{intervals.set(++id,{ms,name});return id;},
+    clearInterval:(id:number)=>intervals.delete(id), setStatus:(text:string)=>calls.push(['status',text]),
+    setSplitBuffer:(_split:number,id:number)=>{splits[0].bufferId=id;calls.push(['restore',id]);},
+    setBufferCursor:()=>{},setSplitScroll:()=>{},dismissPreview:()=>{},
+    clearNamespace:(id:number,ns:string)=>calls.push(['clear',id,ns]),
+    flush:async()=>{},
+    previewFileInSplit:(_split:number,path:string)=>{
+      buffers.push({id:17,window_id:1,path,modified:false,is_preview:true,splits:[1]});splits[0].bufferId=17;
+    },
+    getLineStartPosition:async()=>0,getLineEndPosition:async()=>12,getBufferText:async()=> 'class Foo {}',
+    addOverlay:(...args:any[])=>calls.push(['overlay',...args]),
+    openMachine:async()=>({readFilePrefixes:async()=>[{path:file.path,text:'class Foo {}'}],close:async()=>true}),
+    on:()=>{},defineMode:()=>{},registerCommand:()=>{},exportPluginApi:(_name:string,value:any)=>{api=value;},
+  };
+  const context = {getEditor:()=>editor,registerHandler:(name:string,fn:any)=>handlers.set(name,fn),
+    configure,defaults,validateProvider,canonicalPath,key,previewMatches,utf16ToByte,diskResults,grep,symbolLanguage,
+    rank,cancellation,enterAction,initial,isCurrent,replaceResults,spec,BRAND_PALETTE,LOADING_STEP_MS,
+    Date:{now:()=>now}};
+  // Imports alone are replaced by the exact modules above; no function-order slices.
+  runInNewContext(stripTypeScriptTypes(source.replace(/^import .*;\n/gm,'')),context);
+  const invoke=(name:string,...args:any[])=>{assert(handlers.has(name));return handlers.get(name)!(...args);};
+  const change=(value:string)=>invoke('search_everywhere_event',{panel_id:73621,window_id:1,widget_key:'query',event_type:'change',payload:{value}});
+  const settle=async()=>{for(let i=0;i<30;i++) await Promise.resolve();};
+  return {api,editor,calls,intervals,invoke,change,settle,get widget(){return widget;},
+    setNow:(value:number)=>{now=value;},setWindow:(value:number)=>{windowId=value;},
+    setAuthority:(value:string)=>{authority=value;},setWindows:(value:any[])=>{windows=value;}};
+}
+
+test("closed sessions defer only owned namespaces until matching window and authority return", async () => {
+  const f=await entryFixture();f.api.configure({symbolLanguages:[]});
+  f.api.registerProvider({name:'files',kind:'files',search:async()=>[file]});
+  f.invoke('search_everywhere_open');f.change('Foo');await f.settle();
+  const overlays=f.calls.filter(c=>c[0]==='overlay');assert(overlays.length>=2);
+  const namespace=overlays[0][2].replace(/:row$/,'');
+  assert.equal(overlays[0].at(-1).bg,BRAND_PALETTE.previewRowBg);
+  assert.equal(overlays[0].at(-1).extendToLineEnd,true);
+  assert(!('fg' in overlays[0].at(-1)));
+  for (const overlay of overlays.slice(1)) {
+    assert.equal(overlay.at(-1).bg,BRAND_PALETTE.matchBg);
+    assert(!('fg' in overlay.at(-1))); // Native syntax foreground is never repainted.
+  }
+  f.setWindow(2);f.invoke('search_everywhere_close');
+  assert(!f.calls.some(c=>c[0]==='clear'));assert.equal(f.intervals.size,1);
+  f.setWindow(1);f.setAuthority('remote');f.setWindows([]);f.invoke('search_everywhere_cleanup');
+  assert(!f.calls.some(c=>c[0]==='clear'));
+  f.setAuthority('local');f.setWindows([{id:1,root:'/root'}]);f.invoke('search_everywhere_cleanup');
+  assert.deepEqual(f.calls.filter(c=>c[0]==='clear'),[['clear',17,namespace+':row'],['clear',17,namespace+':match']]);
+  assert.equal(f.intervals.size,0);
 });
 
 test("loader owns pending generation, resets deadlines and never dispatches search or preview", async () => {
-  const {readFileSync}=await import('node:fs');const {stripTypeScriptTypes}=await import('node:module');
-  const {runInNewContext}=await import('node:vm');
-  const source=readFileSync(new URL('../search_everywhere.ts',import.meta.url),'utf8');
-  const code=source.slice(source.indexOf('function stopLoading('),source.indexOf('function draw('));
-  let now=1000,id=0,draws=0;const active=new Map<number,string>();
-  const context:any={LOADING_STEP_MS,Date:{now:()=>now},valid:(s:any)=>context.session===s,
-    draw:()=>draws++,editor:{setInterval:(ms:number,name:string)=>{assert.equal(ms,150);active.set(++id,name);return id;},clearInterval:(id:number)=>active.delete(id)}};
-  runInNewContext(stripTypeScriptTypes(code),context);
-  const s={mounted:true,state:{pending:1,generation:1},loadingTimer:null,loadingGeneration:0,loadingFrame:0,loadingNextAt:0};
-  context.session=s;context.syncLoading(s);context.syncLoading(s);assert.equal(active.size,1);
-  context.loadingTick();assert.equal(draws,0);now=1150;context.loadingTick();assert.equal(s.loadingFrame,1);assert.equal(draws,1);
-  context.loadingTick();assert.equal(draws,1);
-  context.stopLoading(s);s.state.generation++;now=1200;context.syncLoading(s);
-  assert.equal(s.loadingFrame,0);context.loadingTick();assert.equal(draws,1);assert.equal(s.loadingNextAt,1350);
-  now=1350;context.loadingTick();assert.equal(draws,2);
-  s.state.pending=0;context.syncLoading(s);assert.equal(active.size,0);context.loadingTick();assert.equal(draws,2);
-  s.state.pending=1;context.syncLoading(s);context.stopLoading(s);context.session=null;now=2000;context.loadingTick();assert.equal(draws,2);
-  const next={...s,state:{pending:1,generation:3},loadingTimer:null};context.session=next;context.syncLoading(next);
-  context.loadingTick();assert.equal(draws,2);assert.equal(next.loadingFrame,0);assert.equal(active.size,1);
+  const f=await entryFixture();f.api.configure({symbolLanguages:[]});let searches=0;
+  let resolve!:(value:any[])=>void;
+  f.api.registerProvider({name:'files',kind:'files',search:()=>{searches++;return new Promise(r=>{resolve=r;});}});
+  f.invoke('search_everywhere_open');f.change('Foo');await f.settle();
+  const label=()=>f.widget.children.find((c:any)=>c.kind==='labeledSection').label;
+  const loading=()=>[...f.intervals.values()].filter(i=>i.name==='search_everywhere_loading');
+  assert.equal(loading().length,1);assert.equal(loading()[0].ms,180);
+  assert.equal(label(),'Results · •·· Searching');f.invoke('search_everywhere_loading');assert.equal(label(),'Results · •·· Searching');
+  f.setNow(1180);f.invoke('search_everywhere_loading');assert.equal(label(),'Results · ·•· Searching');
+  f.setNow(1200);f.change('Other');assert.equal(label(),'Results · •·· Searching');assert.equal(loading().length,1);
+  f.invoke('search_everywhere_loading');assert.equal(label(),'Results · •·· Searching');
+  f.setNow(1380);f.invoke('search_everywhere_loading');assert.equal(label(),'Results · ·•· Searching');
+  assert.equal(searches,1);assert(!f.calls.some(c=>c[0]==='overlay'));
+  resolve([]);await f.settle();assert.equal(searches,2);resolve([]);await f.settle();
+  assert.equal(loading().length,0);assert.equal(label(),'Results');
+  f.change('Again');await f.settle();f.invoke('search_everywhere_close');assert.equal(f.intervals.size,0);
+  f.setNow(2000);f.invoke('search_everywhere_loading');assert.equal(f.intervals.size,0);
+  f.invoke('search_everywhere_open');f.change('Next');assert.equal(label(),'Results · •·· Searching');
+  f.invoke('search_everywhere_loading');assert.equal(label(),'Results · •·· Searching');
+  f.invoke('search_everywhere_close');
+});
+
+test("cancellation isolates failures, clears callbacks once and safely handles late registration", () => {
+  const errors:unknown[]=[];let second=0;
+  const c=cancellation('/root',1,'Foo',80,()=>{},error=>errors.push(error));
+  c.ctx.onCancel(()=>{throw new Error('first');});c.ctx.onCancel(()=>second++);
+  c.cancel();c.cancel();assert.equal(second,1);assert.equal(errors.length,1);
+  c.ctx.onCancel(()=>{throw new Error('late');});assert.equal(errors.length,2);
+  const badReporter=cancellation('/root',1,'Foo',80,()=>{},()=>{throw new Error('observer');});
+  badReporter.ctx.onCancel(()=>{throw new Error('callback');});assert.doesNotThrow(badReporter.cancel);
+});
+
+test("throwing provider cancellation cannot prevent Escape cleanup or timeout logical finish", async () => {
+  const f=await entryFixture();f.api.configure({symbolLanguages:[],timeoutMs:200});
+  let reject!:(error:Error)=>void, runs=0, cancelled=0;
+  f.api.registerProvider({name:'files',kind:'files',search:(_q:string,ctx:any)=>{
+    runs++;ctx.onCancel(()=>{throw new Error('cancel failed');});ctx.onCancel(()=>cancelled++);
+    return new Promise((_resolve,r)=>{reject=r;});
+  }});
+  f.invoke('search_everywhere_open');f.change('Foo');await f.settle();
+  f.setNow(1200);f.invoke('search_everywhere_tick');
+  const footer=f.widget.children.filter((c:any)=>c.kind==='raw').at(-1).entries[0].text;
+  assert(footer.includes('timeout'));assert(!footer.includes('Incomplete'));
+  assert.equal(cancelled,1);assert.equal(f.intervals.size,1);
+  f.change('Other');assert.equal(runs,1);reject(new Error('stale rejection'));await f.settle();assert.equal(runs,2);
+  f.invoke('search_everywhere_close');assert.equal(cancelled,2);assert.equal(f.intervals.size,0);
+  assert(f.calls.some(c=>c[0]==='unmount'));assert(f.calls.some(c=>c[0]==='restore'&&c[1]===1));
+  assert.equal(f.calls.filter(c=>c[0]==='status'&&c[1].includes('cancellation callback failed')).length,2);
+  reject(new Error('closed rejection'));await f.settle();assert.equal(f.intervals.size,0);
 });

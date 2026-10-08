@@ -48,6 +48,18 @@ class DemoTests(unittest.TestCase):
             frames[0].save(path)
             with self.assertRaises(ValueError): demo.verify_gif(path,.375)
 
+    def test_dense_dot_area_is_not_hash_noise(self):
+        try: renderer=demo.Renderer()
+        except demo.Blocked as error: self.skipTest(str(error))
+        screen=renderer.pyte.Screen(130,36);stream=renderer.pyte.ByteStream(screen)
+        for phase,chars in enumerate(('•··','·•·','··•')):
+            stream.feed(('\x1b[H'+chars).encode())
+            native=renderer.image(screen).crop((0,0,33,24))
+            self.assertEqual(demo.dot_position(native)[0],phase)
+            self.assertEqual(demo.dot_position(native.resize((23,16)))[0],phase)
+        with self.assertRaisesRegex(ValueError,'not distinguishable'):
+            demo.dot_position(renderer.Image.new('RGB',(23,16),'black'))
+
     def test_readme_preserved_on_errors_and_concurrency(self):
         with tempfile.TemporaryDirectory() as temp:
             path=Path(temp)/'README.md'

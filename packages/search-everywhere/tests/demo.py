@@ -125,58 +125,105 @@ class Renderer:
         return image
 
 
-def cell_proof(screen, name):
+def theme_color(data, key):
+    if isinstance(data, str): data = json.loads(data)
+    section, field = key.split('.')
+    value = data[section][field]
+    if isinstance(value, list): return ''.join(f'{v:02x}' for v in value)
+    names = {'Yellow':'brown','Blue':'blue','Cyan':'cyan','White':'white','Black':'black','DarkGray':'brightblack','Gray':'white','Red':'red','Green':'green','Magenta':'magenta','Default':'default'}
+    resolved=names.get(value,value.lower())
+    return COLORS.get(resolved,resolved)
+
+
+def cell_proof(screen, name, theme):
     text = '\n'.join(screen.display)
     if 'CUSTOM' in text or 'Kotlin' not in text: raise ValueError('Native caption/title evidence missing')
     is_regex = name == 'full nonliteral callback override'
     expected = 'class Bar { val needle' if is_regex else 'class Foo { fun findUser()'
     line = next(((y, row.rfind(expected)) for y,row in enumerate(screen.display) if row.rfind(expected) > 35), None)
     if line is None: raise ValueError('Actual native source pane absent')
-    y, x = line
-    cells = [screen.buffer[y][c] for c in range(x,x+len(expected))]
-    if not any(c.fg == '00ffff' for c in cells): raise ValueError('Native grammar foreground absent')
+    y,x = line; cells = [screen.buffer[y][c] for c in range(x,x+len(expected))]
+    if len({c.fg for c in cells if c.data.strip()}) < 2: raise ValueError('Native grammar foreground absent')
+    match = theme_color(theme,'search.match_bg')
     hits = [dict(row=y,col=x,text=c.data,fg=c.fg,bg=c.bg,bold=c.bold)
-            for y,row in screen.buffer.items() for x,c in row.items() if c.bg == '153c43']
-    if not hits or not all(c['bold'] for c in hits): raise ValueError('Mint RGB/bold match absent')
+            for y,row in screen.buffer.items() for x,c in row.items() if c.bg == match]
+    if not hits or not all(c['bold'] for c in hits): raise ValueError('Theme match background/bold absent')
     if not any(c['col'] > 35 for c in hits) or not any(c['col'] < 35 for c in hits):
         raise ValueError('Native and snippet matches required')
-    if not all(c['fg'] in ('f2f6fc','b6c2d2','a4acb9') for c in hits if c['col'] < 35): raise ValueError('Left snippets must remain plain secondary/demoted text')
     titles = ['Bar.kt:1','Foo.kt:1'] if is_regex else ['Foo.kt:1','build/Foo.kt:1:1']
     if not all(title in text for title in titles): raise ValueError('Basename:line evidence absent')
     if is_regex and 'Bar.kt (preview)' not in text: raise ValueError('Native preview tab absent')
     return dict(phase=name, hits=hits, native_cells=[dict(text=c.data,fg=c.fg,bg=c.bg,bold=c.bold) for c in cells])
 
 
-def spinner_proof(screen, renderer, base, name):
+def pulse_cells(screen):
     from wcwidth import wcswidth
-    candidates = [(y, row.index(' Searching')-1) for y,row in enumerate(screen.display) if ' Searching' in row]
-    if len(candidates) != 1: raise ValueError('Single native footer spinner required')
-    y,x = candidates[0]; cell = screen.buffer[y][x]; char = cell.data
-    if wcswidth(char) != 1 or char not in '◜◝◞◟⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏|/-\\':
-        raise ValueError('Unsupported/non-single-cell native spinner')
-    if cell.bold or cell.fg != '8eb9b3': raise ValueError('Quiet spinner style mismatch')
-    for candidate in '◜◝◞◟':
-        candidate_mask = renderer.fonts[0].getmask(candidate)
-        missing_mask = renderer.fonts[0].getmask(chr(0x10ffff))
-        if wcswidth(candidate) != 1 or not candidate_mask.getbbox() or (candidate_mask.size,bytes(candidate_mask)) == (missing_mask.size,bytes(missing_mask)):
-            raise ValueError('Rotating arc font coverage/width missing')
-    font = renderer.icon(char) if pua(char) else renderer.fonts[0]
-    mask, missing = font.getmask(char), font.getmask(chr(0x10ffff))
-    if not mask.getbbox() or (mask.size,bytes(mask)) == (missing.size,bytes(missing)):
-        raise ValueError('Native spinner capture glyph lacks font coverage')
-    image = renderer.image(screen); image.save(base/(name+'.png'))
-    tile = image.crop((x*11,y*24,(x+1)*11,(y+1)*24))
-    bg = tuple(int(cell.bg[i:i+2],16) for i in (0,2,4)) if cell.bg != 'default' else (0,0,0)
-    if not any(pixel != bg for pixel in tile.getdata()): raise ValueError('Spinner pixels absent')
-    def luminance(rgb):
-        values = [v/255 for v in rgb]
-        values = [v/12.92 if v <= .04045 else ((v+.055)/1.055)**2.4 for v in values]
-        return sum(v*w for v,w in zip(values,(.2126,.7152,.0722)))
-    fg = tuple(int(cell.fg[i:i+2],16) for i in (0,2,4))
-    contrast = (max(luminance(fg),luminance(bg))+.05)/(min(luminance(fg),luminance(bg))+.05)
-    if contrast < 4.5: raise ValueError('Spinner contrast below 4.5:1')
-    return dict(contrast_ratio=contrast,char=char,position=[y,x],width=1,fg=cell.fg,bg=cell.bg,bold=cell.bold,
-                glyph_notdef_different=True,pixel_sha256=hashlib.sha256(tile.tobytes()).hexdigest(),png_sha256=sha(base/(name+'.png')))
+    matches=[]
+    for y,row in enumerate(screen.display):
+        found=re.search(r'Results · ([•·]{3}) Searching',row)
+        if found: matches.append((y,found.start(1),found.group(1)))
+    if not matches: return None
+    if len(matches)!=1: raise ValueError('Single Results pulse required')
+    y,x,chars=matches[0]
+    if chars not in ('•··','·•·','··•') or wcswidth(chars)!=3: raise ValueError('Three-cell pulse required')
+    return dict(position=[y,x],chars=chars,width=3,crop=[x*11,y*24,(x+3)*11,(y+1)*24])
+
+
+def spinner_proof(screen, renderer, base, name):
+    proof=pulse_cells(screen)
+    if proof is None: raise ValueError('Native Results pulse absent')
+    for char in '•·':
+        mask=renderer.fonts[0].getmask(char);missing=renderer.fonts[0].getmask(chr(0x10ffff))
+        if not mask.getbbox() or (mask.size,bytes(mask))==(missing.size,bytes(missing)):
+            raise ValueError('Pulse font coverage absent')
+    image=renderer.image(screen);image.save(base/(name+'.png'))
+    proof['png_sha256']=sha(base/(name+'.png'));proof['glyph_notdef_different']=True
+    return proof
+
+
+def dot_position(image):
+    # Measure foreground area against each cell's own border background, not hash noise.
+    scores=[]
+    for i in range(3):
+        tile=image.crop((round(i*image.width/3),0,round((i+1)*image.width/3),image.height))
+        bg=tile.getpixel((0,0))
+        scores.append(sum(max(abs(p[c]-bg[c]) for c in range(3)) > 45 for p in tile.getdata()))
+    order=sorted(scores,reverse=True)
+    if order[0]<4 or order[0]<max(1,order[1])*1.3: raise ValueError('Decoded dense dot not distinguishable')
+    return scores.index(max(scores)),scores
+
+
+def encoded_motion(base, ffmpeg, samples):
+    from PIL import Image
+    if not samples: raise ValueError('No source pulse samples')
+    if len({tuple(s['crop']) for s in samples})!=1: raise ValueError('Pulse geometry jitter')
+    crop=samples[0]['crop'];x,y,right,bottom=crop;w,h=right-x,bottom-y
+    raw=invoke([ffmpeg,'-v','error','-i',str(base/'demo.mp4'),'-vf',f'crop={w}:{h}:{x}:{y}:exact=1','-f','rawvideo','-pix_fmt','rgb24','-']).stdout
+    proofs={'mp4':[],'gif':[]}
+    for sample in samples:
+        n=sample['source_frame_index'];tile=Image.frombytes('RGB',(w,h),raw[n*w*h*3:(n+1)*w*h*3])
+        pos,scores=dot_position(tile)
+        if pos!=sample['chars'].index('•'): raise ValueError('MP4 dot differs from source')
+        proofs['mp4'].append(dict(sample,decoded_position=pos,foreground_pixels=scores))
+    with Image.open(base/'demo.gif') as gif:
+        elapsed=0;scaled=[round(x*gif.width/1430),round(y*gif.height/864),round(right*gif.width/1430),round(bottom*gif.height/864)]
+        for n in range(gif.n_frames):
+            gif.seek(n);duration=gif.info.get('duration',0)/1000
+            source_index=round(elapsed*FPS);sample=next((s for s in samples if s['source_frame_index']==source_index),None)
+            if sample:
+                pos,scores=dot_position(gif.convert('RGB').crop(scaled))
+                if pos!=sample['chars'].index('•'): raise ValueError('GIF dot differs from source')
+                proofs['gif'].append(dict(sample,decoded_frame_index=n,decoded_time=elapsed,crop=scaled,decoded_position=pos,foreground_pixels=scores))
+            elapsed+=duration
+    for kind,rows in proofs.items():
+        groups=[]
+        for row in rows:
+            if not groups or row['source_frame_index']!=groups[-1][-1]['source_frame_index']+1 or row['recording_time']-groups[-1][-1]['recording_time']>1.5/FPS:
+                groups.append([])
+            groups[-1].append(row)
+        if not any(len({r['decoded_position'] for r in group})>=3 and (group[-1]['source_frame_index']-group[0]['source_frame_index'])/FPS>=1.5 for group in groups):
+            raise ValueError(kind+' needs three decoded positions over at least 1.5 contiguous seconds')
+    return proofs
 
 
 def invoke(command, timeout=60):
@@ -230,7 +277,9 @@ def make(base, source, source_files):
     if any(row['copy_sha256'] != row['source_sha256'] for row in native_sources.values() if not row['instrumented']):
         raise ValueError('Uninstrumented native source copy mismatch')
     screen = renderer.pyte.Screen(130,36); stream = renderer.pyte.ByteStream(screen)
-    index = 0; proofs = []; spinner = []
+    index = 0; proofs = []; spinner = []; samples = []; theme_proofs=[]
+    theme_rows={(row['state'],row['name']):row for row in json.loads((base/'theme-evidence.json').read_text())}
+    theme=json.loads((base/'theme-meta.json').read_text())['data']
     # Replay every skipped byte and resize before the next selected frame.
     with tempfile.TemporaryDirectory(prefix='demo-frames-', dir=base) as temp:
         for number, timestamp in enumerate(times):
@@ -239,16 +288,38 @@ def make(base, source, source_files):
                 if event['type'] == 'chunk': stream.feed(raw[event['start']:event['offset']])
                 elif event['type'] == 'resize': screen.resize(lines=event['rows'], columns=event['columns'])
                 elif event['type'] == 'phase' and event['name'] in ('native bind; live files and fake LSP', 'full nonliteral callback override'):
-                    proofs.append(cell_proof(screen,event['name']))
+                    proofs.append(cell_proof(screen,event['name'],theme))
                     renderer.image(screen).save(base/('demo-foo-proof.png' if event['name'].startswith('native bind') else 'demo-regex-proof.png'))
+                if event['type']=='phase' and event['name'].startswith('theme-'):
+                    _,state,name=event['name'].split('-',2);meta=theme_rows[state,name]['data']
+                    title=next(((y,row.index('SEARCH EVERYWHERE')) for y,row in enumerate(screen.display) if 'SEARCH EVERYWHERE' in row),None)
+                    if title is None: raise ValueError('Native theme widget absent')
+                    y,x=title;actual=screen.buffer[y][x].fg;expected=theme_color(meta,'ui.help_key_fg')
+                    if actual!=expected: raise ValueError(f'Idle/pending widget theme mismatch: {name} {actual} != {expected}')
+                    match=theme_color(meta,'search.match_bg');native_hits=[(y,x) for y,row in screen.buffer.items() for x,c in row.items() if x>35 and c.bg==match]
+                    if not native_hits: raise ValueError('Native source overlay did not retheme')
+                    native_fg=theme_color(meta,'syntax.type')
+                    if any(screen.buffer[y][x].fg!=native_fg for y,x in native_hits): raise ValueError('Native query overlay replaced syntax foreground')
+                    selected=next(((y,row.index('> ')) for y,row in enumerate(screen.display) if '> ' in row and 'Foo.kt:1' in row),None)
+                    if selected is None: raise ValueError('Selected card theme evidence absent')
+                    sy,sx=selected;selected_cell=screen.buffer[sy][sx]
+                    if selected_cell.fg!=theme_color(meta,'ui.popup_selection_fg') or selected_cell.bg!=theme_color(meta,'ui.popup_selection_bg'):
+                        raise ValueError('Selected card theme foreground/background mismatch')
+                    foreign=[(y,x) for y,row in screen.buffer.items() for x,c in row.items() if c.bg=='c800b4']
+                    if not foreign: raise ValueError('Foreign overlay lost on theme change')
+                    pulse=pulse_cells(screen)
+                    if (state=='pending') != bool(pulse): raise ValueError('Native theme pending/idle pulse mismatch')
+                    theme_proofs.append(dict(state=state,name=name,widget_fg=actual,expected_fg=expected,native_match_bg=match,native_hits=native_hits,native_syntax_fg=native_fg,selected_fg=selected_cell.fg,selected_bg=selected_cell.bg,foreign_cells=foreign,providerCallsUnchanged=True))
                 if event['type'] == 'phase' and event['name'] in ('demo-spinner-a','demo-spinner-b'):
                     spinner.append(spinner_proof(screen, renderer, base, event['name']))
                 index += 1
+            pulse=pulse_cells(screen)
+            if pulse: samples.append(dict(pulse,source_frame_index=number,recording_time=timestamp))
             image = renderer.image(screen)
             image.save(Path(temp) / f'{number:04d}.png')
         # PNG is a lossless proof from the same terminal replay, not ui.json.
         image.save(base / 'demo-proof.png')
-        if len(spinner) != 2 or spinner[0]['char'] == spinner[1]['char'] or spinner[0]['position'] != spinner[1]['position']:
+        if len(spinner) != 2 or spinner[0]['chars'] == spinner[1]['chars'] or spinner[0]['position'] != spinner[1]['position']:
             raise ValueError('Two distinct fixed-cell native spinner frames required')
         if len(proofs) != 2: raise ValueError('Required demo phases not replayed')
         target = base / 'demo.mp4'
@@ -264,7 +335,8 @@ def make(base, source, source_files):
     if not decoded_times or abs(int(decoded_times[-1])/1_000_000 - len(times)/FPS) > 1/FPS:
         raise ValueError('Decoded duration mismatch')
     gif = make_gif(base, renderer.ffmpeg, len(times)/FPS)
-    manifest = dict(gif=gif, gif_sha256=gif['sha256'], mp4_bytes=target.stat().st_size,
+    motion=encoded_motion(base,renderer.ffmpeg,samples)
+    manifest = dict(encoded_motion=motion, theme_evidence=theme_proofs, theme=theme, gif=gif, gif_sha256=gif['sha256'], mp4_bytes=target.stat().st_size,
                     phase_pngs={name: sha(base/name) for name in ('demo-foo-proof.png','demo-regex-proof.png')},
                     decoded_duration=int(decoded_times[-1])/1_000_000, ansi_sha256=sha(base/'terminal.ansi'), recording_sha256=sha(base/'recording.jsonl'),
                     mp4_sha256=sha(target), png_sha256=sha(base/'demo-proof.png'), frames=len(times), fps=FPS,

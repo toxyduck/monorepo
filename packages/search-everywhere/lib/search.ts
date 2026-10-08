@@ -16,14 +16,27 @@ export function enterAction(s: State): "open" | "grep" | "wait" {
   if (s.selected) return "open";
   return s.pending || s.errors.length || s.warnings.length || !s.query.trim() ? "wait" : "grep";
 }
-export function cancellation(root: string, windowId: number, query: string, maxResults: number, warn: (message: string) => void = () => {}): {
+export function cancellation(root: string, windowId: number, query: string, maxResults: number, warn: (message: string) => void = () => {}, reportCancelError: (error: unknown) => void = () => {}): {
   ctx: SearchContext; cancel: () => void;
 } {
   let cancelled = false;
   const handlers = new Set<() => void>();
+  function invoke(fn: () => void): void {
+    try { fn(); }
+    catch (error) {
+      // Reporting must not interrupt the remaining callbacks or host teardown either.
+      try { reportCancelError(error); } catch {}
+    }
+  }
   return {ctx: {root, windowId, query, maxResults, warn, get cancelled() { return cancelled; },
-    onCancel(fn) { if (cancelled) fn(); else handlers.add(fn); return () => handlers.delete(fn); }},
-    cancel() { if (cancelled) return; cancelled = true; for (const fn of handlers) fn(); handlers.clear(); }};
+    onCancel(fn) { if (cancelled) invoke(fn); else handlers.add(fn); return () => handlers.delete(fn); }},
+    cancel() {
+      if (cancelled) return;
+      cancelled = true;
+      const callbacks = [...handlers];
+      handlers.clear();
+      for (const fn of callbacks) invoke(fn);
+    }};
 }
 export function isCurrent(s: State, generation: number, ctx: SearchContext): boolean {
   return s.generation === generation && !ctx.cancelled;

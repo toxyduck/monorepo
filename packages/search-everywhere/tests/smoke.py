@@ -23,7 +23,7 @@ env['COLORTERM'] = 'truecolor'
 c = base/'config'/'fresh'; plugins = c/'plugins'; (plugins/'lib').mkdir(parents=True)
 # Every disposable instrumentation anchor must match the approved source contract.
 def instrument(content, old, new):
-    assert old in content, ("Missing native instrumentation anchor", old)
+    assert content.count(old) == 1, ("Native instrumentation anchor must be unique", old, content.count(old))
     return content.replace(old, new)
 # Explicit files only: no repository/home/project traversal.
 production_files = ['search_everywhere.ts', 'lib/config.ts', 'lib/model.ts', 'lib/providers.ts', 'lib/rank.ts', 'lib/search.ts', 'lib/ui.ts']
@@ -100,13 +100,20 @@ registerHandler("smoke_occupied",()=>editor.mountFloatingWidget(73621,{kind:"tex
 registerHandler("smoke_free",()=>editor.unmountFloatingWidget(73621));editor.registerCommand("Smoke Free Dock","","smoke_free");
 registerHandler("smoke_parallel",()=>api.configure({symbolLanguages:["kotlin","python","json","kotlin"],timeoutMs:1200}));editor.registerCommand("Smoke Parallel","","smoke_parallel");
 registerHandler("smoke_symbols_override",()=>{remove=api.registerProvider({name:"fixture-symbols",kind:"symbols",async search(q,ctx){record({symbolOverride:q});return [{kind:"symbol",path:ctx.root+"/Foo.kt",name:"Foo",line:1,col:7}];}});});editor.registerCommand("Smoke Symbols Override","","smoke_symbols_override");
+registerHandler("smoke_demo_timeout",()=>api.configure({timeoutMs:4000}));editor.registerCommand("Smoke Demo Timeout","","smoke_demo_timeout");
+const builtin=editor.getBuiltinThemes(); const dark=JSON.parse(builtin.dark); const light=JSON.parse(builtin.light);
+const custom=JSON.parse(builtin.dark);custom.name="fixture-semantic";custom.ui.help_key_fg=[240,190,90];custom.ui.popup_text_fg=[225,235,245];custom.ui.popup_selection_fg=[250,250,250];custom.ui.popup_selection_bg=[55,70,95];custom.editor.line_number_fg=[150,160,175];custom.editor.current_line_bg=[35,45,60];custom.search.match_bg=[80,55,100];
+editor.saveThemeFile(custom.name,JSON.stringify(custom));editor.reloadThemes();
+for(const name of ["dark","light","fixture-semantic"]){registerHandler("smoke_theme_"+name,()=>{const ok=editor.applyTheme(name);record({theme:name,ok,data:editor.getThemeData(name)});editor.replaceFile(editor.localPath(THEMEMETA),JSON.stringify({name,data:editor.getThemeData(name)}));});editor.registerCommand("Smoke Theme "+name,"","smoke_theme_"+name);}
+editor.applyTheme("dark");editor.replaceFile(editor.localPath(THEMEMETA),JSON.stringify({name:"dark",data:editor.getThemeData("dark")}));
+registerHandler("smoke_cancel_fixture",()=>{api.configure({timeoutMs:450});remove=api.registerProvider({name:"fixture-cancel",kind:"symbols",async search(q,ctx){ctx.onCancel(()=>{record({cancelFirst:q});throw new Error("Owned cancellation callback failure");});ctx.onCancel(()=>record({cancelSecond:q}));record({cancelBusy:q});while(!editor.readFile(editor.localPath(CANCELRELEASE+q)))await editor.delay(30);record({cancelSettled:q});throw new Error("Owned stale provider rejection");}});});editor.registerCommand("Smoke Cancel Fixture","","smoke_cancel_fixture");
 record({stage:"await auto-start LSP"});await editor.delay(800);
 for(const file of ["Slow.py","Error.json","Foo.kt"]){editor.openFileInSplit(editor.getActiveSplitId(),ROOT+"/"+file);await editor.flush();await editor.delay(300);}
 try{record({lsp:await editor.sendLspRequest("kotlin","workspace/symbol",{query:"Foo"})});}catch(e){record({lspError:String(e)});}
 record({nativeSyntax:await editor.getHighlights(editor.getActiveBufferId(),0,40)});
 record({initialPanes:editor.listSplits(),dockCols:editor.dockCols()});record({ready:true});if(last)editor.replaceFile(editor.localPath(response),JSON.stringify({id:last}));
 }catch(e){record({error:String(e)});}
-})().catch(e=>getEditor().setStatus(String(e)));'''.replace('ROOT',json.dumps(str(root))).replace('DEST',json.dumps(str(base/'events.json'))).replace('REQUEST',json.dumps(str(base/'request.json'))).replace('RESPONSE',json.dumps(str(base/'response.json')))
+})().catch(e=>getEditor().setStatus(String(e)));'''.replace('CANCELRELEASE',json.dumps(str(base/'cancel-release-'))).replace('THEMEMETA',json.dumps(str(base/'theme-meta.json'))).replace('ROOT',json.dumps(str(root))).replace('DEST',json.dumps(str(base/'events.json'))).replace('REQUEST',json.dumps(str(base/'request.json'))).replace('RESPONSE',json.dumps(str(base/'response.json')))
 (c/'init.ts').write_text(init)
 m,s = pty.openpty(); fcntl.ioctl(s,termios.TIOCSWINSZ,struct.pack('HHHH',36,130,0,0))
 p = None; data = bytearray(); phases = []; known_children = {}
@@ -201,12 +208,13 @@ try:
     command('Smoke Free Dock');free=snapshot();assert not free['dockOpen']
     command('Smoke Foreign Overlay');command('Smoke Snapshot');phases.append({'phase':'native baseline foreign overlay','ansiBytes':len(data)})
     record('phase', name='demo-foo-start')
-    (base/'demo-lsp-delay').write_text('0.9')
+    (base/'demo-lsp-delay').write_text('2.8')
+    command('Smoke Demo Timeout')
     keys(b'\x1bs');keys(b'Foo',.28)
     assert json.loads((base/'ui.json').read_text())['state']['pending'] > 0
     record('phase', name='demo-spinner-a')
     pump(.19);record('phase', name='demo-spinner-b')
-    pump(1);(base/'demo-lsp-delay').unlink()
+    pump(2.7);(base/'demo-lsp-delay').unlink()
     mark('native bind; live files and fake LSP')
     keys(b'\x1b[B');mark('demo-foo-arrow');keys(b'\x1b[A');mark('demo-foo-end')
     state=phases[-1]['ui']['state'];assert not state['pending'] and not state['errors'],state
@@ -214,11 +222,26 @@ try:
     tree=phases[-1]['ui']['tree'];cards=node(tree, 'results')['itemSpecs']
     assert cards[2]['entries'][0]['text']=='   Foo.kt:1'
     assert cards[2]['entries'][1]['text']=='  file · build/Foo.kt:1:1'
-    for row in cards[2]['entries']:assert row['style']['fg']==[164,172,185]
+    for row in cards[2]['entries']:assert row['style']['fg']=='editor.line_number_fg'
     snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
     assert snap['panes'][0]['x']==next(e['dockCols'] for e in events() if 'initialPanes' in e) and snap['panes'][0]['width']>65,snap
     assert snap['syntax'], 'Actual native Kotlin buffer has no syntax spans'
     assert not any('syntax preview unavailable' in str(c) for c in tree['children'])
+    theme_evidence=[]
+    for name in ['light','fixture-semantic','dark']:
+        before=snapshot(); calls=sum('files' in e for e in events());command('Smoke Theme '+name);after=snapshot()
+        assert before['panes']==after['panes'] and calls==sum('files' in e for e in events()), 'Idle theme changed preview/providers'
+        record('phase',name='theme-idle-'+name)
+        theme_evidence.append(dict(state='idle',name=name,data=json.loads((base/'theme-meta.json').read_text())['data'],panesUnchanged=True,providerCallsUnchanged=True))
+    (base/'demo-lsp-delay').write_text('2.8')
+    keys(b'X',.05);keys(b'\x7f',.1)
+    for name in ['light','fixture-semantic','dark']:
+        assert json.loads((base/'ui.json').read_text())['state']['pending']>0
+        calls=sum('files' in e for e in events());command('Smoke Theme '+name)
+        assert calls==sum('files' in e for e in events()), 'Pending theme reran provider'
+        record('phase',name='theme-pending-'+name)
+        theme_evidence.append(dict(state='pending',name=name,data=json.loads((base/'theme-meta.json').read_text())['data'],providerCallsUnchanged=True))
+    pump(3);(base/'demo-lsp-delay').unlink();(base/'theme-evidence.json').write_text(json.dumps(theme_evidence,indent=2))
     provider_calls=sum('files' in e for e in events())
     for rows in [18,6,36]:
         record('resize', rows=rows, columns=130)
@@ -360,6 +383,20 @@ try:
     assert counts=={name:len(lsp_rows(name)) for name in counts}, 'custom symbols did not replace entire builtin'
     mark('full custom symbols override bypasses all builtin languages')
     keys(b'\x1b');command('Smoke Remove')
+    command('Smoke Cancel Fixture')
+    for q,action in [('cancel-timeout','timeout'),('cancel-escape','escape')]:
+        keys(b'\x1bs');paste(q);wait_for(lambda:any(e.get('cancelBusy')==q for e in events()))
+        if action=='timeout':wait_for(lambda:ui()['pending']==0)
+        else:keys(b'\x1b',.1)
+        wait_for(lambda:any(e.get('cancelSecond')==q for e in events()))
+        assert sum(e.get('cancelFirst')==q for e in events())==1 and sum(e.get('cancelSecond')==q for e in events())==1
+        assert not any(e.get('cancelSettled')==q for e in events()), 'Cancellation fixture must remain physically busy'
+        if action=='timeout':keys(b'\x1b',.1)
+        command('Smoke Snapshot');closed=snapshot()
+        assert not json.loads((base/'lifecycle.json').read_text())['open'] and not any(b['is_preview'] for b in closed['buffers'])
+        (base/('cancel-release-'+q)).write_text('go');wait_for(lambda:any(e.get('cancelSettled')==q for e in events()));pump(.15)
+        phases.append(dict(phase='throwing cancellation '+action+' cleans native session while provider busy',callbackCounts=[1,1]))
+    command('Smoke Remove');command('Smoke Parallel')
     for name in ['lsp.jsonl','slow-lsp.jsonl','error-lsp.jsonl']:
         active=set()
         for row in lsp_rows(name):
