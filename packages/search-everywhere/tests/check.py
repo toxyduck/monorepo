@@ -14,6 +14,7 @@ import time
 SOURCE = Path(__file__).resolve().parent.parent
 REPO = SOURCE.parent.parent
 SHARED = Path('packages/_shared/runtime_brand.ts')
+SHARED_FILES = [SHARED, Path('packages/_shared/runtime_icons.ts'), Path('packages/_shared/native_demo.py')]
 FRESH = Path.home()/'.local/opt/fresh/fresh'
 NODE = Path.home()/'.local/opt/fresh-node/bin/node'
 FILES = ['search_everywhere.ts', *['lib/' + n + '.ts' for n in
@@ -32,22 +33,8 @@ GATES = {
 }
 
 
-def isolated_env(base):
-    env = os.environ.copy()
-    for key in list(env):
-        if key.startswith('FRESH_') or key in (
-                'NODE_OPTIONS', 'NODE_PATH', 'PYTHONSTARTUP', 'PYTHONPATH',
-                'BASH_ENV', 'ENV', 'ZDOTDIR', 'LD_PRELOAD', 'LD_LIBRARY_PATH'):
-            del env[key]
-    for key, name in [('HOME', 'home'), ('XDG_CONFIG_HOME', 'config'),
-                      ('XDG_DATA_HOME', 'data'), ('XDG_STATE_HOME', 'state'),
-                      ('XDG_CACHE_HOME', 'cache'), ('XDG_RUNTIME_DIR', 'runtime'),
-                      ('TMPDIR', 'tmp')]:
-        path = base / name
-        path.mkdir(mode=0o700)
-        env[key] = str(path)
-    return env
-
+sys.path.insert(0, str(REPO / 'packages/_shared'))
+from native_demo import isolated_env
 
 def tool(candidate):
     path = Path(candidate) if candidate else None
@@ -127,10 +114,11 @@ def main():
         dest = fixture / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(SOURCE / name, dest)
-    shared_dest = fixture_repo / SHARED
-    shared_dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(REPO / SHARED, shared_dest)
-    source_files = ['packages/search-everywhere/' + name for name in FILES] + [str(SHARED)]
+    for shared in SHARED_FILES:
+        shared_dest = fixture_repo / shared
+        shared_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO / shared, shared_dest)
+    source_files = ['packages/search-everywhere/' + name for name in FILES] + [str(shared) for shared in SHARED_FILES]
     checks = []
     native_log = None
     evidence = None

@@ -1,0 +1,8 @@
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+import {mkdir,writeFile,copyFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+export const inputs=['packages/vcs-diff/vcs_diff.ts',...['config','model','run','ui'].map(n=>'packages/vcs-diff/lib/'+n+'.ts'),'packages/_shared/runtime_brand.ts','packages/_shared/runtime_icons.ts'].sort();
+export async function build(toolDir,dest){const root=fileURLToPath(new URL('../../..',import.meta.url));const esbuild=createRequire(path.join(toolDir,'package.json'))('esbuild');assert.equal(esbuild.version,'0.25.12');const r=await esbuild.build({absWorkingDir:root,entryPoints:['packages/vcs-diff/vcs_diff.ts'],bundle:true,format:'iife',platform:'browser',target:'es2020',write:false,metafile:true});assert.deepEqual(Object.keys(r.metafile.inputs).sort(),inputs);await mkdir(path.join(dest,'presets'),{recursive:true});await writeFile(path.join(dest,'vcs_diff.ts'),r.outputFiles[0].contents);await writeFile(path.join(dest,'package.json'),JSON.stringify({name:'vcs-diff',version:'0.1.0',type:'plugin',description:'VCS-neutral read-only diffs and inline blame',author:'toxyduck',license:'UNLICENSED',fresh:{entry:'vcs_diff.ts',min_version:'0.5.2'}},null,2)+'\n');for(const p of ['git.js','arc.js','patch.js'])await copyFile(path.join(root,'packages/vcs-diff/presets',p),path.join(dest,'presets',p));await copyFile(path.join(root,'packages/vcs-diff/README.md'),path.join(dest,'README.md'));return r.metafile;}
+if(process.argv[1]===fileURLToPath(import.meta.url)){const [tool,dest]=process.argv.slice(2);assert(tool&&dest,'Usage: node build-package.mjs ISOLATED_ESBUILD_PREFIX OUTPUT');await build(path.resolve(tool),path.resolve(dest));}

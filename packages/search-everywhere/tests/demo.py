@@ -18,112 +18,12 @@ START = '<!-- demo-video:start -->'
 END = '<!-- demo-video:end -->'
 
 
-class Blocked(RuntimeError):
-    pass
-
-
-def dependencies():
-    try:
-        import pyte
-        from PIL import Image, ImageDraw, ImageFont
-        import imageio_ffmpeg
-    except ImportError as error:
-        raise Blocked('Install tests/requirements-demo.txt in a local venv.') from error
-    return pyte, Image, ImageDraw, ImageFont, imageio_ffmpeg.get_ffmpeg_exe()
-
-
-def sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
-def recording(base):
-    raw = (base / 'terminal.ansi').read_bytes()
-    if len(raw) > MAX_ANSI:
-        raise ValueError('ANSI cap exceeded')
-    rows = [json.loads(line) for line in (base / 'recording.jsonl').read_text().splitlines()]
-    last_time = -1; offset = 0
-    for row in rows:
-        if not isinstance(row['time'], (int, float)) or not 0 <= row['time'] < 300 or row['time'] < last_time:
-            raise ValueError('Invalid recording clock')
-        if row['type'] == 'chunk':
-            if row['start'] != offset or not offset < row['offset'] <= len(raw):
-                raise ValueError('Invalid chunk offsets')
-            offset = row['offset']
-        elif row['offset'] != offset:
-            raise ValueError('Invalid event offset')
-        if row['type'] == 'resize' and not (1 <= row['rows'] <= 100 and 1 <= row['columns'] <= 200):
-            raise ValueError('Invalid terminal size')
-        if row['type'] not in ('chunk', 'phase', 'resize'):
-            raise ValueError('Unknown recording event')
-        last_time = row['time']
-    if offset != len(raw):
-        raise ValueError('Incomplete recording')
-    return raw, rows
-
-
-COLORS = dict(black='000000', red='cd0000', green='00cd00', brown='cdcd00', blue='0000ee', magenta='cd00cd', cyan='00cdcd', white='e5e5e5', brightblack='7f7f7f', brightred='ff0000', brightgreen='00ff00', brightbrown='ffff00', brightblue='5c5cff', brightmagenta='ff00ff', brightcyan='00ffff', brightwhite='ffffff')
-
-
-def rgb(value, default):
-    color = default if value == 'default' else COLORS.get(value, value)
-    if not re.fullmatch('[0-9a-fA-F]{6}', color):
-        raise ValueError('Unknown ANSI color: ' + value)
-    return '#' + color
-
-
-def pua(char):
-    return 0xe000 <= ord(char) <= 0xf8ff or 0xf0000 <= ord(char) <= 0x10fffd
-
-
-class Renderer:
-    def __init__(self):
-        self.pyte, self.Image, self.Draw, self.Font, self.ffmpeg = dependencies()
-        paths = [Path(os.environ.get('DEMO_FONT_REGULAR', '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf')),
-                 Path(os.environ.get('DEMO_FONT_BOLD', '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf')),
-                 Path(os.environ.get('DEMO_FONT_ICONS', str(Path.home() / '.local/share/fonts/NerdFontsSymbolsOnly/SymbolsNerdFontMono-Regular.ttf')))]
-        if not all(path.is_file() for path in paths):
-            raise Blocked('Known regular/bold/Nerd font missing; set DEMO_FONT_REGULAR/BOLD/ICONS.')
-        self.fonts = [self.Font.truetype(str(path), 18) for path in paths[:2]]
-        self.icon_path = paths[2]; self.icons = {}; self.proof = {}
-        self.font_info = [{'path': str(path), 'sha256': sha(path)} for path in paths]
-
-    def icon(self, char):
-        if char not in self.icons:
-            for size in range(18, 0, -1):
-                font = self.Font.truetype(str(self.icon_path), size); box = font.getbbox(char)
-                if box[2]-box[0] <= 11 and box[3]-box[1] <= 24:
-                    break
-            mask = font.getmask(char); missing = font.getmask(chr(0x10ffff))
-            if not mask.getbbox() or (mask.size, bytes(mask)) == (missing.size, bytes(missing)):
-                raise ValueError(f'Nerd font lacks U+{ord(char):04X}')
-            self.icons[char] = font
-            self.proof[f'U+{ord(char):04X}'] = dict(size=size, bbox=box, mask_sha256=hashlib.sha256(bytes(mask)).hexdigest(), notdef_different=True)
-        return self.icons[char]
-
-    def image(self, screen):
-        from wcwidth import wcswidth
-        image = self.Image.new('RGB', (1430, 864), 'black')
-        for y in range(screen.lines):
-            for x in range(screen.columns):
-                cell = screen.buffer[y][x]
-                if cell.data == '':  # wide-cell continuation is drawn with its lead cell
-                    continue
-                width = max(1, wcswidth(cell.data))
-                fg, bg = rgb(cell.fg, 'e5e5e5'), rgb(cell.bg, '000000')
-                if cell.reverse: fg, bg = bg, fg
-                tile = self.Image.new('RGB', (11*width, 24), bg); draw = self.Draw.Draw(tile)
-                if cell.data.strip():
-                    if any(pua(c) for c in cell.data):
-                        if len(cell.data) != 1: raise ValueError('Combined PUA cell unsupported')
-                        font = self.icon(cell.data); b = font.getbbox(cell.data)
-                        pos = ((11-(b[2]-b[0]))//2-b[0], (24-(b[3]-b[1]))//2-b[1])
-                    else:
-                        font = self.fonts[bool(cell.bold)]; pos = (0, 1)
-                    draw.text(pos, cell.data, font=font, fill=fg)
-                if cell.underscore: draw.line((0,22,11*width-1,22), fill=fg)
-                image.paste(tile, (11*x,24*y))
-        return image
-
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / '_shared'))
+import native_demo as native
+from native_demo import (Blocked, dependencies, sha, recording, COLORS, rgb, pua, Renderer,
+                         invoke, verify_gif, make_gif, readme_snapshot, replace_readme,
+                         asset_snapshot, stage_asset, atomic_asset, publish)
 
 def theme_color(data, key):
     if isinstance(data, str): data = json.loads(data)
@@ -280,40 +180,6 @@ def encoded_stability(base, ffmpeg, samples):
     return result
 
 
-def invoke(command, timeout=60):
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-    if result.returncode:
-        raise RuntimeError(result.stderr.decode(errors='replace')[-3000:])
-    return result
-
-
-def verify_gif(path, duration):
-    from PIL import Image
-    if not 0 < path.stat().st_size <= MAX_GIF: raise ValueError('GIF size cap exceeded')
-    with Image.open(path) as image:
-        if image.format != 'GIF' or not image.is_animated or not 2 <= image.n_frames <= MAX_FRAMES:
-            raise ValueError('Animated GIF frame cap/format mismatch')
-        width,height = image.size
-        if width != GIF_WIDTH or abs(width/height - 1430/864) > .01:
-            raise ValueError('GIF dimensions/aspect mismatch')
-        elapsed = 0
-        for i in range(image.n_frames):
-            image.seek(i); image.load(); elapsed += image.info.get('duration',0)
-        if elapsed <= 0 or elapsed > 30000 or abs(elapsed/1000-duration) > .15:
-            raise ValueError('GIF duration mismatch')
-        return dict(frames=image.n_frames, dimensions=[width,height], duration=elapsed/1000,
-                    bytes=path.stat().st_size, sha256=sha(path), full_decode='PASS')
-
-
-def make_gif(base, ffmpeg, duration, frames):
-    target = base/'demo.gif'
-    filters = f'fps={FPS},scale={GIF_WIDTH}:-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle'
-    # Use the same lossless PTY replay frames, not H264 quantization noise.
-    invoke([ffmpeg,'-hide_banner','-loglevel','error','-y','-framerate',str(FPS),'-i',str(frames/'%04d.png'),
-            '-filter_complex',filters,'-loop','0','-threads','2',str(target)])
-    return verify_gif(target,duration)
-
-
 def make(base, source, source_files):
     raw, events = recording(base)
     renderer = Renderer()
@@ -327,8 +193,8 @@ def make(base, source, source_files):
     if not times or len(times) > MAX_FRAMES: raise ValueError('Frame/duration cap exceeded')
     native_sources = json.loads((base/'native-source-manifest.json').read_text())
     production = {name: sha(source/name) for name in source_files if name.endswith('.ts') and '/tests/' not in name}
-    if len(production) != 8 or production != {name: row['source_sha256'] for name,row in native_sources.items()}:
-        raise ValueError('Exact eight-production-file native provenance mismatch')
+    if len(production) != 9 or production != {name: row['source_sha256'] for name,row in native_sources.items()}:
+        raise ValueError('Exact nine-production-file native provenance mismatch')
     if any(row['copy_sha256'] != row['source_sha256'] for row in native_sources.values() if not row['instrumented']):
         raise ValueError('Uninstrumented native source copy mismatch')
     screen = renderer.pyte.Screen(130,36); stream = renderer.pyte.ByteStream(screen)
@@ -404,99 +270,9 @@ def make(base, source, source_files):
                     duration=len(times)/FPS, dimensions=[1430,864], codec='h264', pixel_format='yuv420p',
                     clips=clips, caps=dict(frames=MAX_FRAMES, seconds=30, ansi_bytes=MAX_ANSI, mp4_bytes=MAX_MP4, gif_bytes=MAX_GIF),
                     fonts=renderer.font_info, glyphs=renderer.proof, highlight_cells=proofs, spinner_cells=spinner,
-                    source_hashes={name: sha(source/name) for name in source_files}, native_sources=native_sources, production_files=8,
+                    source_hashes={name: sha(source/name) for name in source_files}, native_sources=native_sources, production_files=9,
                     tools={name: importlib.metadata.version(name) for name in ('pyte','Pillow','wcwidth','imageio-ffmpeg')},
                     ffmpeg_version=invoke([renderer.ffmpeg,'-version']).stdout.decode().splitlines()[0], decode_metadata=meta,
                     caption='Actual native Fresh PTY; fake Kotlin LSP and custom file/content fixture providers. Not real backend acceptance.')
     (base/'demo-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     return manifest
-
-
-def readme_snapshot(path):
-    path = Path(path)
-    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
-        raise ValueError('README symlink rejected')
-    data = path.read_bytes(); text = data.decode()
-    if text.count(START) != 1 or text.count(END) != 1 or text.index(START) >= text.index(END):
-        raise ValueError('Unique ordered demo markers required')
-    return data
-
-
-def replace_readme(path, original):
-    if readme_snapshot(path) != original: raise ValueError('README changed concurrently')
-    text = original.decode(); a = text.index(START)+len(START); b = text.index(END)
-    block = '\n[![Plugin demo](assets/demo.gif)](assets/demo.mp4)\n'
-    fd, temp = tempfile.mkstemp(prefix='.demo-readme-', dir=path.parent)
-    try:
-        with os.fdopen(fd,'wb') as stream: stream.write((text[:a]+block+text[b:]).encode())
-        os.chmod(temp, path.stat().st_mode & 0o777)
-        if readme_snapshot(path) != original: raise ValueError('README changed concurrently')
-        os.replace(temp,path)
-    finally:
-        if os.path.exists(temp): os.unlink(temp)
-
-
-def asset_snapshot(path):
-    if path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
-        raise ValueError('Asset symlink rejected')
-    if path.exists() and not path.is_file(): raise ValueError('Asset must be a regular file')
-    return path.read_bytes() if path.exists() else None
-
-
-def stage_asset(path, data):
-    asset_snapshot(path)  # Recheck symlink boundaries immediately before staging.
-    fd, temp = tempfile.mkstemp(prefix='.demo-asset-', dir=path.parent)
-    try:
-        with os.fdopen(fd,'wb') as stream: stream.write(data)
-        os.chmod(temp,0o644)
-        return Path(temp)
-    except Exception:
-        os.unlink(temp)
-        raise
-
-
-def atomic_asset(path, data):
-    temp = stage_asset(path,data)
-    try: os.replace(temp,path)
-    finally:
-        if temp.exists(): temp.unlink()
-
-
-def publish(base, readme, original, source_root=None, source_files=None):
-    if readme_snapshot(readme) != original: raise ValueError('README changed concurrently')
-    manifest = json.loads((base/'demo-manifest.json').read_text())
-    if source_root is not None:
-        expected = {name: sha(source_root/name) for name in source_files}
-        if expected != manifest['source_hashes']:
-            raise ValueError('Source changed since native capture')
-    assets = readme.parent/'assets'
-    if assets.is_symlink() or any(parent.is_symlink() for parent in assets.parents):
-        raise ValueError('Asset directory symlink rejected')
-    if assets.exists() and not assets.is_dir(): raise ValueError('Assets directory required')
-    targets = [assets/'demo.gif', assets/'demo.mp4']
-    old = [asset_snapshot(path) for path in targets]
-    data = [(base/path.name).read_bytes() for path in targets]
-    for path, content, cap in zip(targets,data,[MAX_GIF,MAX_MP4]):
-        if not 0 < len(content) <= cap or hashlib.sha256(content).hexdigest() != manifest[path.suffix[1:]+'_sha256']:
-            raise ValueError('Verified asset hash/size mismatch')
-    assets.mkdir(exist_ok=True)
-    changed = []; staged = []
-    try:
-        for path, content in zip(targets,data): staged.append(stage_asset(path,content))
-        for path, temp in zip(targets,staged):
-            if asset_snapshot(path) != old[targets.index(path)]:
-                raise ValueError('Asset changed concurrently')
-            os.replace(temp,path); changed.append(path)
-        # README is the last operation that can fail on the successful path.
-        replace_readme(readme,original)
-    except Exception:
-        for temp in staged:
-            if temp.exists(): temp.unlink()
-        for path in reversed(changed):
-            if asset_snapshot(path) != data[targets.index(path)]:
-                continue  # Never roll back an independent writer's replacement.
-            previous = old[targets.index(path)]
-            if previous is None: path.unlink()
-            else: atomic_asset(path,previous)
-        raise
-    return 'assets/demo.gif + assets/demo.mp4'

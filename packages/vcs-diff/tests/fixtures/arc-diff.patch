@@ -1,0 +1,11 @@
+diff --git a/.arcignore b/.arcignore
+--- a/.arcignore
++++ b/.arcignore
+@@ -101,6 +101,7 @@ pyrightconfig.json
+ .opencode/skills
+ **/.claude/settings.local.json
+ CLAUDE.local.md
++AGENTS.override.md
+ 
+ # Private in root, but can be used in subprojects
+ /.codeassistant/

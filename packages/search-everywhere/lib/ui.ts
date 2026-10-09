@@ -1,3 +1,4 @@
+import {fileIcon} from "../../_shared/runtime_icons.ts";
 import {key, matchRanges, previewMatches, utf16ToByte, utf8Length, type Range, type SearchResult} from "./model.ts";
 import {demoted} from "./rank.ts";
 import type {State} from "./search.ts";
@@ -16,10 +17,7 @@ export function rich(text: string, matches: Range[] = [], grey = false, syntax: 
   if (grey && !syntax.length) inlineOverlays.push({start: 0, end: utf8Length(text), style: {fg: palette.demoted}, unit: "byte"});
   return {text, inlineOverlays, ...(grey ? {style: {fg: palette.demoted}} : {})};
 }
-export function fileIcon(path: string): string {
-  const icons: Record<string, string> = {kt: "", kts: "", ts: "", tsx: "", js: "", json: "", py: "", rs: "", md: "", sh: "", yaml: "", yml: ""};
-  return icons[path.split(".").pop()!.toLowerCase()] || "󰈙";
-}
+export {fileIcon} from "../../_shared/runtime_icons.ts";
 // Regions are local UTF-16 ranges; convert once after joining the actual prefixes.
 function resultRow(s: State, r: SearchResult, patterns: string[], root: string, width: number): TextPropertyEntry {
   const active = key(r) === s.selected;

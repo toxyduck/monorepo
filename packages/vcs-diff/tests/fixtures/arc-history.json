@@ -1,0 +1,27 @@
+[
+  {
+    "commit":"47c1d33914b557f98629a64c904871373e60c983",
+    "parents":
+      [
+        "0016d59168ff3f60adcd2cd3415f4cdf1849b311",
+        "e9b1dd3bd84498ead6df00074bea9bab97cf7126"
+      ],
+    "author":"zgl6yxnt",
+    "date":"2026-10-01T09:53:33Z",
+    "revision":21450587,
+    "message":"Добавление AGENTS.override.md в .arcignore.\n\nCodex использует этот файл **вместо** `AGENTS.md` **в той же директории: происходит полная замена инструкций, а не их дополнение**. Игнор нужен, чтобы персональные настройки не попадали в репозиторий и не заменяли оригинальный `AGENTS.md`.\nhttps://learn.chatgpt.com/docs/agent-configuration/agents-md#how-codex-discovers-guidance\n\nREVIEW: 15608878",
+    "path":".arcignore",
+    "paths":
+      [
+        ".arcignore"
+      ],
+    "attributes":
+      {
+        "pr.diffset":"37995309",
+        "pr.id":"15608878",
+        "svn.txn.arc-trace-id":"arc-vcs-preprod-stage-merged-26:sqs:merge:1:MergePr:15608878",
+        "svn.txn.date":"2026-10-01T09:53:31Z",
+        "svn.txn.id":"21450584-cswpn"
+      }
+  }
+]

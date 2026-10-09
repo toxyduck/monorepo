@@ -21,7 +21,7 @@ class DemoTests(unittest.TestCase):
             with self.assertRaises(ValueError): demo.recording(base)
             rows[1]['start']=0; rows[2]['time']=.05; save()
             with self.assertRaises(ValueError): demo.recording(base)
-            with patch.object(demo,'MAX_ANSI',1):
+            with patch.object(demo.native,'MAX_ANSI',1):
                 with self.assertRaises(ValueError): demo.recording(base)
 
     def test_missing_dependencies_blocked(self):
@@ -42,7 +42,7 @@ class DemoTests(unittest.TestCase):
             frames[0].save(path,save_all=True,append_images=frames[1:],duration=125,loop=0)
             proof=demo.verify_gif(path,.375)
             self.assertEqual(proof['frames'],3)
-            with patch.object(demo,'MAX_GIF',1):
+            with patch.object(demo.native,'MAX_GIF',1):
                 with self.assertRaisesRegex(ValueError,'size cap'): demo.verify_gif(path,.375)
             with self.assertRaisesRegex(ValueError,'duration'): demo.verify_gif(path,2)
             frames[0].save(path)
@@ -105,7 +105,7 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(readme.read_bytes(),original)
             self.assertEqual((assets/'demo.gif').read_bytes(),b'old gif')
             self.assertEqual((assets/'demo.mp4').read_bytes(),b'old video')
-            with patch.object(demo,'replace_readme',side_effect=ValueError('concurrent')):
+            with patch.object(demo.native,'replace_readme',side_effect=ValueError('concurrent')):
                 with self.assertRaises(ValueError): demo.publish(base,readme,original)
             self.assertEqual((assets/'demo.gif').read_bytes(),b'old gif')
             manifest['gif_sha256']='bad'; (base/'demo-manifest.json').write_text(json.dumps(manifest))
@@ -134,7 +134,7 @@ class DemoTests(unittest.TestCase):
         failed=subprocess.CompletedProcess(['ffmpeg'],1,b'',b'encoding failed')
         with patch('subprocess.run',return_value=failed):
             with self.assertRaisesRegex(RuntimeError,'encoding failed'): demo.invoke(['ffmpeg'])
-        with patch.object(demo,'invoke') as encode, patch.object(demo,'verify_gif',return_value={'frames':3}):
+        with patch.object(demo.native,'invoke') as encode, patch.object(demo.native,'verify_gif',return_value={'frames':3}):
             demo.make_gif(Path('/tmp/evidence'), 'ffmpeg', .375, Path('/tmp/lossless-frames'))
             command=encode.call_args.args[0]
             self.assertEqual(command[command.index('-i')+1], '/tmp/lossless-frames/%04d.png')

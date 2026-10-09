@@ -17,13 +17,9 @@ for i in range(20): (root/f'Foo{i}.kt').write_text(f'class Foo{i} {{}}\n')
 (root/'Error.json').write_text('{}\n')
 (root/'build'/'Foo.kt').write_text('class Foo { val needle = 2 }\n')
 (root/'Long.kt').write_text(('x'*1023+'\n')*70+'class Foo {}\n')
-env = os.environ.copy()
-for k, d in [('HOME','home'),('XDG_CONFIG_HOME','config'),('XDG_DATA_HOME','data'),('XDG_STATE_HOME','state'),('XDG_CACHE_HOME','cache'),('XDG_RUNTIME_DIR','runtime'),('TMPDIR','tmp')]:
-    (base/d).mkdir(); env[k] = str(base/d)
-for k in list(env):
-    if k.startswith('FRESH_') or k in ('NODE_OPTIONS','NODE_PATH','PYTHONSTARTUP','PYTHONPATH','BASH_ENV','ENV','ZDOTDIR','LD_PRELOAD','LD_LIBRARY_PATH'): del env[k]
-env['TERM'] = 'xterm-256color'
-env['COLORTERM'] = 'truecolor'
+sys.path.insert(0, str(source.parent / '_shared'))
+from native_demo import isolated_env, open_pty, launch, stop_process, record_event, write_source_copy
+env = isolated_env(base)
 c = base/'config'/'fresh'; plugins = c/'plugins'; (plugins/'lib').mkdir(parents=True)
 # Every disposable instrumentation anchor must match the approved source contract.
 def instrument(content, old, new):
@@ -54,14 +50,15 @@ for name in production_files:
         content=instrument(content, '  const line = text.replace', '  editor.replaceFile(editor.localPath('+json.dumps(str(base/'decoration.json'))+'),JSON.stringify({start,end,text,snippet:r.snippet,safe:safe()})); const line = text.replace')
         content=instrument(content, 'const editor = getEditor();', 'const editor = getEditor(); const originalSpawn=editor.spawnProcess.bind(editor); editor.spawnProcess=(...args)=>{editor.replaceFile(editor.localPath('+json.dumps(str(base/'spawn.json'))+'),JSON.stringify(args));return originalSpawn(...args);};')
         content=instrument(content, 's.mounted = false; editor.unmountFloatingWidget(PANEL);','s.mounted = false; editor.unmountFloatingWidget(PANEL); editor.replaceFile(editor.localPath('+json.dumps(str(base/'lifecycle.json'))+'),JSON.stringify({open:session!==null,queued:queued.size,busy:[...busy]}));')
-    (plugins/name).write_text(content)
+    write_source_copy(source/name, plugins/name, lambda _: content)
 # ui.ts resolves ../../_shared from config/fresh/plugins/lib.
-shared = c/'_shared'/'runtime_brand.ts'; shared.parent.mkdir()
-shared.write_bytes((source.parent/'_shared'/'runtime_brand.ts').read_bytes())
 native_sources = {
     'packages/search-everywhere/' + name: dict(source_sha256=hashlib.sha256((source/name).read_bytes()).hexdigest(), copy_sha256=hashlib.sha256((plugins/name).read_bytes()).hexdigest(), instrumented=name == 'search_everywhere.ts')
     for name in production_files}
-native_sources['packages/_shared/runtime_brand.ts'] = dict(source_sha256=hashlib.sha256((source.parent/'_shared'/'runtime_brand.ts').read_bytes()).hexdigest(), copy_sha256=hashlib.sha256(shared.read_bytes()).hexdigest(), instrumented=False)
+for name in ['runtime_brand.ts', 'runtime_icons.ts']:
+    shared=c/'_shared'/name
+    hashes=write_source_copy(source.parent/'_shared'/name,shared)
+    native_sources['packages/_shared/'+name]=dict(**hashes,instrumented=False)
 (base/'native-source-manifest.json').write_text(json.dumps(native_sources, indent=2)+'\n')
 fake = base/'fake_lsp.py'
 fake.write_text((source/'tests'/'fake_lsp.py').read_text())
@@ -121,11 +118,11 @@ record({initialPanes:editor.listSplits(),dockCols:editor.dockCols()});record({re
 }catch(e){record({error:String(e)});}
 })().catch(e=>getEditor().setStatus(String(e)));'''.replace('CANCELRELEASE',json.dumps(str(base/'cancel-release-'))).replace('THEMEMETA',json.dumps(str(base/'theme-meta.json'))).replace('ROOT',json.dumps(str(root))).replace('DEST',json.dumps(str(base/'events.json'))).replace('REQUEST',json.dumps(str(base/'request.json'))).replace('RESPONSE',json.dumps(str(base/'response.json')))
 (c/'init.ts').write_text(init)
-m,s = pty.openpty(); fcntl.ioctl(s,termios.TIOCSWINSZ,struct.pack('HHHH',36,130,0,0))
+m,s = open_pty(36,130)
 p = None; data = bytearray(); phases = []; known_children = {}
 clock = time.monotonic(); recording = []
 def record(kind, **fields):
-    recording.append(dict(type=kind, time=time.monotonic()-clock, offset=len(data), **fields))
+    record_event(recording,clock,len(data),kind,**fields)
 record('resize', rows=36, columns=130)
 def typed(text, wait=1):
     for char in text: keys(char.encode(), .15)
@@ -232,7 +229,7 @@ def interrupted(signum, frame):
     raise RuntimeError('Smoke interrupted; cleaning owned processes')
 signal.signal(signal.SIGTERM, interrupted)
 try:
-    p=subprocess.Popen([binary,'--no-upgrade-check','--locale','en',str(root/'Foo.kt')],cwd=root,env=env,stdin=s,stdout=s,stderr=s,start_new_session=True)
+    p=launch(binary,root/'Foo.kt',root,env,s)
     os.close(s);pump(3)
     ready_deadline=time.monotonic()+4
     while not any(e.get('ready') for e in events()) and time.monotonic()<ready_deadline: pump(.1)
@@ -522,13 +519,7 @@ try:
 finally:
     # A second TERM must not interrupt cleanup after the runner timeout.
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    if p and p.poll() is None:
-        # Unreaped owned leader keeps its process-group identity; no broad cleanup.
-        try: os.killpg(p.pid,signal.SIGTERM)
-        except ProcessLookupError: pass
-        try:p.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            os.killpg(p.pid,signal.SIGKILL);p.wait(timeout=2)
+    stop_process(p)
     for pid in live_children():
         try:os.kill(pid,signal.SIGTERM)
         except ProcessLookupError:pass

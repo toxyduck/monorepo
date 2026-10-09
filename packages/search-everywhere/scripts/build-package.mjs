@@ -10,7 +10,7 @@ import {createHash} from 'node:crypto';
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 const pkg = 'packages/search-everywhere';
 export const files = ['package.json', 'search_everywhere.ts', 'README.md'];
-export const inputs = [ `${pkg}/search_everywhere.ts`, ...['config', 'model', 'providers', 'rank', 'search', 'ui'].map(n => `${pkg}/lib/${n}.ts`), 'packages/_shared/runtime_brand.ts' ].sort();
+export const inputs = [ `${pkg}/search_everywhere.ts`, ...['config', 'model', 'providers', 'rank', 'search', 'ui'].map(n => `${pkg}/lib/${n}.ts`), 'packages/_shared/runtime_brand.ts', 'packages/_shared/runtime_icons.ts' ].sort();
 export const manifest = {
   name: 'search-everywhere', version: '0.1.0', type: 'plugin',
   description: 'Files provider, workspace symbols, and disk grep',

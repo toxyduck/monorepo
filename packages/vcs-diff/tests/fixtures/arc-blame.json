@@ -1,0 +1,47 @@
+{
+  "annotation":
+    [
+      {
+        "date":"2025-12-29T06:51:58Z",
+        "commit":"100ad7c9cffa8d574dd44ce95a2d2d63f9dbf488",
+        "text":"# if you want to ignore some tmp files produced by tools - just add `.implicit_vcs_ignore.` somewhere in file-name\n",
+        "author":"ilnurkh",
+        "line":1
+      },
+      {
+        "date":"2025-12-29T06:51:58Z",
+        "commit":"100ad7c9cffa8d574dd44ce95a2d2d63f9dbf488",
+        "text":"*.implicit_vcs_ignore.*\n",
+        "author":"ilnurkh",
+        "line":2
+      }
+    ],
+  "commits":
+    [
+      {
+        "commit":"100ad7c9cffa8d574dd44ce95a2d2d63f9dbf488",
+        "parents":
+          [
+            "eada3b3f80cb971b2ecc10a4ca91fe33e4bbadc5",
+            "8aef1cd8f83382ed15a50e41d98cd93deebb5db0"
+          ],
+        "author":"ilnurkh",
+        "date":"2025-12-29T06:51:58Z",
+        "revision":18441292,
+        "message":"Add new ignore rule: *.implicit_vcs_ignore.*\n\nпредлагается добавить возможность добавить любой файл в игнор по достаточно понятной подтроске `.implicit_vcs_ignore.`\n\nREVIEW: 11250987",
+        "path":".arcignore",
+        "paths":
+          [
+            ".arcignore"
+          ],
+        "attributes":
+          {
+            "pr.diffset":"27960572",
+            "pr.id":"11250987",
+            "svn.txn.arc-trace-id":"e2d9d7b8-1654-4358-bdd4-e0695503fe3b",
+            "svn.txn.date":"2025-12-29T06:51:56Z",
+            "svn.txn.id":"18441291-azoku"
+          }
+      }
+    ]
+}

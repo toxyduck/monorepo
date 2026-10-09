@@ -275,6 +275,12 @@
     return s.generation === generation && !ctx.cancelled;
   }
 
+  // packages/_shared/runtime_icons.ts
+  function fileIcon(path) {
+    const icons = { kt: "\uE634", kts: "\uE634", ts: "\uE628", tsx: "\uE628", js: "\uE60C", json: "\uE60B", py: "\uE606", rs: "\uE7A8", md: "\uE609", sh: "\uE795", yaml: "\uE615", yml: "\uE615" };
+    return icons[path.split(".").pop().toLowerCase()] || "\u{F0219}";
+  }
+
   // packages/_shared/runtime_brand.ts
   var BRAND_PALETTE = {
     accent: "ui.help_key_fg",
@@ -315,10 +321,6 @@
     }
     if (grey && !syntax.length) inlineOverlays.push({ start: 0, end: utf8Length(text), style: { fg: BRAND_PALETTE.demoted }, unit: "byte" });
     return { text, inlineOverlays, ...grey ? { style: { fg: BRAND_PALETTE.demoted } } : {} };
-  }
-  function fileIcon(path) {
-    const icons = { kt: "\uE634", kts: "\uE634", ts: "\uE628", tsx: "\uE628", js: "\uE60C", json: "\uE60B", py: "\uE606", rs: "\uE7A8", md: "\uE609", sh: "\uE795", yaml: "\uE615", yml: "\uE615" };
-    return icons[path.split(".").pop().toLowerCase()] || "\u{F0219}";
   }
   function resultRow(s, r, patterns, root, width) {
     const active = key(r) === s.selected;

@@ -19,3 +19,5 @@ export function loadingFrame(phase: number): string {
   const index = Math.trunc(phase);
   return LOADING_FRAMES[((index % LOADING_FRAMES.length) + LOADING_FRAMES.length) % LOADING_FRAMES.length];
 }
+// Line-indicator SDK accepts RGB only, unlike widgets/virtual text's semantic roles.
+export const MARKER_RGB = [80, 180, 230] as const;
