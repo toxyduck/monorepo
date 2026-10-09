@@ -1,4 +1,4 @@
-import {key, matchRanges, type SearchResult} from "./model.ts";
+import {fold, key, matchRanges, type SearchResult} from "./model.ts";
 export const defaultDemotePaths = ["**/build/**", "**/generated/**", "**/.gradle/**"];
 export function demoted(path: string, patterns: string[]): boolean {
   return patterns.some(pattern => {
@@ -8,21 +8,22 @@ export function demoted(path: string, patterns: string[]): boolean {
   });
 }
 export function quality(text: string, query: string): number {
-  const t = text.toLowerCase(), q = query.toLowerCase();
+  const t = fold(text), q = fold(query);
   if (!q || t === q) return 0;
   if (t.startsWith(q)) return 1;
   if (t.includes(q)) return 2;
-  return matchRanges(text, query).length ? 3 : 4;
+  return matchRanges(text, query).length ? 4 : 5;
 }
 export function rank(results: SearchResult[], query: string, patterns: string[], limit: number): SearchResult[] {
   const unique = new Map<string, SearchResult>();
-  for (const r of results) unique.set(key(r), {...r, matches: {
-    name: matchRanges(r.name, query), snippet: r.matches?.snippet || []
-  }});
-  const kind = {file: 0, symbol: 1, content: 2};
+  for (const r of results) {
+    const prior = unique.get(key(r));
+    // One representative content row per path; filename-only rows remain searchable.
+    if (!prior || r.kind === 'content' && (prior.kind === 'file' || r.line! < prior.line!))
+      unique.set(key(r), {...r, matches: {name: matchRanges(r.name, query), snippet: r.matches?.snippet || []}});
+  }
+  const score = (r: SearchResult) => Math.min(quality(r.name, query), r.kind === "content" ? 3 : quality(r.path, query) + 1);
   return [...unique.values()].sort((a, b) =>
     Number(demoted(a.path, patterns)) - Number(demoted(b.path, patterns)) ||
-    quality(a.kind === "content" ? a.snippet || "" : a.name, query) -
-      quality(b.kind === "content" ? b.snippet || "" : b.name, query) ||
-    kind[a.kind] - kind[b.kind] || key(a).localeCompare(key(b))).slice(0, limit);
+    score(a) - score(b) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, limit);
 }

@@ -1,13 +1,13 @@
 {
   "name": "search-everywhere",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "type": "plugin",
-  "description": "Files provider, workspace symbols, and disk grep",
+  "description": "Literal filename and content search with configured trunk/local providers",
   "author": "toxyduck",
   "license": "UNLICENSED",
   "repository": "https://github.com/toxyduck/monorepo",
   "fresh": {
-    "entry": "search_everywhere.ts",
+    "entry": "search-everywhere.ts",
     "min_version": "0.5.2"
   }
 }

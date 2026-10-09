@@ -1,4 +1,3 @@
-import {fileIcon} from "../../_shared/runtime_icons.ts";
 import {key, matchRanges, previewMatches, utf16ToByte, utf8Length, type Range, type SearchResult} from "./model.ts";
 import {demoted} from "./rank.ts";
 import type {State} from "./search.ts";
@@ -17,7 +16,10 @@ export function rich(text: string, matches: Range[] = [], grey = false, syntax: 
   if (grey && !syntax.length) inlineOverlays.push({start: 0, end: utf8Length(text), style: {fg: palette.demoted}, unit: "byte"});
   return {text, inlineOverlays, ...(grey ? {style: {fg: palette.demoted}} : {})};
 }
-export {fileIcon} from "../../_shared/runtime_icons.ts";
+export function fileIcon(path: string): string {
+  const icons: Record<string, string> = {kt: "", kts: "", ts: "", tsx: "", js: "", json: "", py: "", rs: "", md: "", sh: "", yaml: "", yml: ""};
+  return icons[path.split(".").pop()!.toLowerCase()] || "󰈙";
+}
 // Regions are local UTF-16 ranges; convert once after joining the actual prefixes.
 function resultRow(s: State, r: SearchResult, patterns: string[], root: string, width: number): TextPropertyEntry {
   const active = key(r) === s.selected;
@@ -34,15 +36,11 @@ function resultRow(s: State, r: SearchResult, patterns: string[], root: string, 
     matches.push(...ranges.map(([a, b]): Range => [prefix + a, prefix + b]));
   };
   append(fileIcon(r.path) + " ", palette.icon);
-  if (r.kind === "symbol") {
-    append(r.name, palette.symbol, true, matchRanges(r.name, s.query));
-    append(" · ", palette.secondary);
-  }
-  const identity = basename + ":" + (r.line || 1);
+  const identity = basename + (r.kind === "content" ? ":" + r.line : "");
   append(identity, palette.text, true, matchRanges(identity, s.query));
   if (r.kind === "content") {
     append(" · ", palette.secondary);
-    append(r.snippet || "[no saved snippet]", palette.text, false, previewMatches(r, s.query));
+    append(r.snippet || "[no source snippet]", palette.text, false, previewMatches(r, s.query));
   }
   if (width >= 48) {
     if (directory) append(" · " + directory, palette.secondary);
@@ -59,13 +57,13 @@ function selectedLocation(s: State, root: string, width: number): TextPropertyEn
   if (!r) return {text: "", style: {fg: palette.secondary}};
   const basename = r.path.split("/").pop() || r.path;
   const relative = root && r.path.startsWith(root + "/") ? r.path.slice(root.length + 1) : basename;
-  const coordinates = ":" + (r.line || 1) + ":" + (r.col || 1);
+  const coordinates = r.line ? ':' + r.line + (r.col ? ':' + r.col : ' (source line)') : '';
   return {text: (width < 48 ? basename + coordinates + " · " : "") + relative + coordinates,
     style: {fg: palette.secondary}};
 }
 function statusFooter(s: State, preview: TextPropertyEntry[], notice: string): TextPropertyEntry {
   const safety = [notice, ...preview.map(p => p.text), ...s.errors, ...s.warnings.map(w => "Incomplete: " + w)].filter(Boolean);
-  const status = [...safety, s.results.length + " results"].join(" · ").replace(/[\r\n]/g, " ");
+  const status = [s.results.length + " results", ...safety].join(" · ").replace(/[\r\n]/g, " ");
   const footer = rich(status);
   footer.style = {fg: palette.text};
   return footer;
@@ -74,22 +72,18 @@ export function spec(s: State, patterns: string[], preview: TextPropertyEntry[],
   const items = s.results.map(r => resultRow(s, r, patterns, root, width));
   const selected = Math.max(0, s.results.findIndex(r => key(r) === s.selected));
   const tiny = height < 9;
-  const grep = {kind: "toggle", key: "grep", label: "Grep", checked: s.mode === "grep", focused: false};
   const hints = {kind: "hintBar", entries: [{keys: "↑/↓", label: width < 48 ? "" : "select"},
-    {keys: "Tab", label: width < 48 ? "" : "Grep"},
-    {keys: "Enter", label: width < 48 ? "" : s.mode === "grep" && !s.armed ? "run grep" : "open"},
+    {keys: "Enter", label: width < 48 ? "" : "open"},
     {keys: "Esc", label: width < 48 ? "" : "close"}]};
   const header = rich("Results · " + s.results.length + (s.pending ? " · Searching " + loadingFrame(phase) : ""));
   header.style = {fg: palette.accent};
   return {kind: "col", children: [
     {kind: "text", key: "query", label: "Query", value: s.query, focused: true, rows: 1, fullWidth: true},
-    ...(!tiny ? [grep] : []),
     {kind: "raw", key: "results-status", entries: [header]},
     {kind: "list", key: "results", items, itemKeys: s.results.map(key), selectedIndex: selected,
-      visibleRows: Math.max(1, height - (tiny ? 5 : 6)), focusable: false},
+      visibleRows: Math.max(1, height - 5), focusable: false},
     {kind: "raw", key: "selected-location", entries: [selectedLocation(s, root, width)]},
     {kind: "raw", entries: [statusFooter(s, preview, notice)]},
-    tiny ? {kind: "row", wrap: false, children: [grep, width < 48
-      ? {kind: "raw", entries: [{text: " ↑↓ Tab ↵ Esc", style: {fg: palette.accent}}]} : hints]} : hints,
+    tiny ? {kind: "raw", entries: [{text: " ↑↓ ↵ Esc", style: {fg: palette.accent}}]} : hints,
   ]};
 }

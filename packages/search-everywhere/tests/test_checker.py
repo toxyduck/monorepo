@@ -26,7 +26,7 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(check.SHARED.as_posix(), 'packages/_shared/runtime_brand.ts')
         self.assertEqual(check.REPO, check.SOURCE.parent.parent)
         self.assertTrue(all(not Path(name).is_absolute() and '..' not in Path(name).parts for name in check.FILES))
-        self.assertEqual(len([name for name in check.FILES if name.endswith('.ts') and not name.startswith('tests/')]) + len([p for p in check.SHARED_FILES if p.suffix == '.ts']), 9)
+        self.assertEqual(len([name for name in check.FILES if name.endswith('.ts') and not name.startswith(('tests/', 'dist/'))]) + 1, 8)
 
     def test_missing_tool(self):
         self.assertIsNone(check.tool('/nonexistent/fresh-search-checker-tool'))

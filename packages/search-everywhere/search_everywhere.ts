@@ -1,132 +1,77 @@
-import {configure, defaults, validateProvider} from "./lib/config.ts";
+import {configure, defaults} from "./lib/config.ts";
 import type {Config} from "./lib/config.ts";
-import {canonicalPath, key, previewMatches, utf16ToByte, type Provider, type SearchResult} from "./lib/model.ts";
-import {diskResults, grep, symbolLanguage} from "./lib/providers.ts";
-import {rank} from "./lib/rank.ts";
-import {cancellation, enterAction, initial, isCurrent, replaceResults, type State} from "./lib/search.ts";
+import {canonicalPath, fold, key, previewMatches, utf16ToByte, utf8Length, type SearchResult} from "./lib/model.ts";
+import {Query, readSettings} from "./lib/query.ts";
+import {enterAction, initial, replaceResults, type State} from "./lib/search.ts";
 import {spec} from "./lib/ui.ts";
 import {BRAND_PALETTE, LOADING_STEP_MS} from "../_shared/runtime_brand.ts";
 
 const editor = getEditor();
-const PANEL = 73621, MODE = "search-everywhere";
+const PANEL = 73621, MODE = "search-everywhere", WIDTH_PCT = 78, HEIGHT_PCT = 65;
 let config = defaults();
-const providers = new Map<string, Provider>();
-// Busy remains set until the actual promise settles, including after timeout/cancel.
-// LSP has no supported cancel route; never accumulate uncancellable calls per provider.
-const busy = new Set<string>();
-const queued = new Map<string, () => void>();
 interface Session {
-  state: State; windowId: number; splitId: number; root: string; authority: string;
-  cancel: (() => void)[]; preview: TextPropertyEntry[]; previewToken: number;
-  previewBusy: boolean; original: SplitSnapshot; cursor: number; ownedPreview: number | null; foreignPreview: boolean;
-  mounted: boolean; jobs: Set<{deadline: number; timeout: () => void}>;
-  decorated: Set<number>; namespace: string;
+  state: State; windowId: number; splitId: number; windowRoot: string; root: string; authority: string;
+  preview: TextPropertyEntry[]; previewToken: number; previewBusy: boolean;
+  original: SplitSnapshot; cursor: number; ownedPreview: number | null; foreignPreview: boolean;
+  mounted: boolean; decorated: Set<number>; namespace: string;
   loadingTimer: number | null; loadingGeneration: number; loadingFrame: number; loadingNextAt: number;
 }
 let session: Session | null = null;
-let timer: number | null = null;
+let index: Query | null = null;
+editor.defineConfigEnum('backend', {values: ['rg', 'remote'] as const, default: 'rg', description: 'Verified non-Arc project search provider'});
+editor.defineConfigEnum('arcBackend', {values: ['rg', 'remote'] as const, default: 'remote', description: 'Verified Arc project search provider (trunk)'});
 let namespaceId = 0;
-type DecorationCleanup = Pick<Session, "windowId" | "root" | "authority" | "decorated" | "namespace">;
-const pendingDecorations = new Map<string, DecorationCleanup>();
+type Cleanup = Pick<Session, "windowId" | "windowRoot" | "authority" | "decorated" | "namespace">;
+const pendingDecorations = new Map<string, Cleanup>();
 let cleanupTimer: number | null = null;
-function retryDecorations(): void {
-  for (const cleanup of pendingDecorations.values()) clearDecorations(cleanup);
-  if (!pendingDecorations.size && cleanupTimer !== null) {
-    editor.clearInterval(cleanupTimer); cleanupTimer = null;
-  }
+function ownsWindow(s: Session): boolean {
+  return editor.activeWindow() === s.windowId && editor.getAuthorityLabel() === s.authority &&
+    editor.listWindows().some(w => w.id === s.windowId && w.root === s.windowRoot && w.root === s.root);
 }
-function valid(s: Session): boolean {
-  return session === s && editor.activeWindow() === s.windowId &&
-    editor.getAuthorityLabel() === s.authority && editor.listWindows().some(w => w.id === s.windowId && w.root === s.root);
+function valid(s: Session): boolean { return session === s && ownsWindow(s); }
+function geometry(): {height: number; width: number} | null {
+  const screen = editor.getScreenSize();
+  const availableWidth = screen.width - (editor.dockOpen() ? editor.dockCols() : 0);
+  const width = Math.min(availableWidth, Math.max(20, Math.floor(availableWidth * WIDTH_PCT / 100))) - 2;
+  if (screen.height < 8 || width < 28) return null;
+  return {height: Math.max(6, Math.floor(screen.height * HEIGHT_PCT / 100) - 2), width};
 }
-function height(): number {
-  const panes = editor.listSplits();
-  return panes.length ? Math.max(...panes.map(p => p.y + p.height)) - Math.min(...panes.map(p => p.y)) : Math.max(1, editor.getScreenSize().height - 2);
-}
-function clearDecorations(s: DecorationCleanup): void {
+function clearDecorations(s: Cleanup): void {
   if (!s.decorated.size) return;
-  pendingDecorations.set(s.namespace, {windowId: s.windowId, root: s.root, authority: s.authority,
-    decorated: s.decorated, namespace: s.namespace});
-  // Do not resolve buffer IDs in another authority or window. Keep only cleanup metadata after close.
+  pendingDecorations.set(s.namespace, s);
   if (editor.getAuthorityLabel() === s.authority) {
     const window = editor.listWindows().find(w => w.id === s.windowId);
-    if (!window || window.root !== s.root) s.decorated.clear();
-    else if (editor.activeWindow() === s.windowId) {
-      for (const id of s.decorated) {
-        const buffer = editor.getBufferInfo(id);
-        if (buffer && buffer.window_id !== s.windowId) continue;
-        if (buffer) {
-          editor.clearNamespace(id, s.namespace + ":row");
-          editor.clearNamespace(id, s.namespace + ":match");
-        }
-        s.decorated.delete(id);
-      }
+    if (!window || window.root !== s.windowRoot) s.decorated.clear();
+    else if (editor.activeWindow() === s.windowId) for (const id of s.decorated) {
+      const b = editor.getBufferInfo(id);
+      if (b && b.window_id !== s.windowId) continue;
+      if (b) { editor.clearNamespace(id, s.namespace + ":row"); editor.clearNamespace(id, s.namespace + ":match"); }
+      s.decorated.delete(id);
     }
   }
   if (!s.decorated.size) pendingDecorations.delete(s.namespace);
-  if (pendingDecorations.size && cleanupTimer === null)
-    cleanupTimer = editor.setInterval(100, "search_everywhere_cleanup");
-  if (!pendingDecorations.size && cleanupTimer !== null) {
-    editor.clearInterval(cleanupTimer); cleanupTimer = null;
-  }
-}
-async function decorate(s: Session, r: SearchResult, id: number, alive: () => boolean): Promise<void> {
-  const safe = () => alive() && s.state.selected === key(r) && !dirty(s, r.path) &&
-    editor.getActiveBufferId() === id && editor.getBufferInfo(id)?.path === r.path;
-  if (!safe()) return;
-  const start = await editor.getLineStartPosition((r.line || 1) - 1);
-  if (!safe() || start === null) return;
-  const end = await editor.getLineEndPosition((r.line || 1) - 1);
-  if (!safe() || end === null || end < start) return;
-  // Saved snippets are bounded to 600 UTF-16 units; never read a whole large native line.
-  const text = await editor.getBufferText(id, start, Math.min(end, start + 2401));
-  if (!safe()) return;
-  const line = text.replace(/\r$/, "");
-  if (!r.snippet || line.slice(0, 600) !== r.snippet) return;
-  s.decorated.add(id);
-  editor.addOverlay(id, s.namespace + ":row", start, end, {bg: BRAND_PALETTE.previewRowBg, extendToLineEnd: true});
-  for (const [a, b] of previewMatches(r, s.state.query)) {
-    const from = utf16ToByte(r.snippet, a), to = utf16ToByte(r.snippet, b);
-    if (from !== null && to !== null && start + to <= end)
-      editor.addOverlay(id, s.namespace + ":match", start + from, start + to, {bg: BRAND_PALETTE.matchBg, bold: true});
-  }
-  await editor.flush();
-  if (!safe()) clearDecorations(s);
+  if (pendingDecorations.size && cleanupTimer === null) cleanupTimer = editor.setInterval(100, "search_everywhere_cleanup");
+  if (!pendingDecorations.size && cleanupTimer !== null) { editor.clearInterval(cleanupTimer); cleanupTimer = null; }
 }
 function stopLoading(s: Session): void {
   if (s.loadingTimer !== null) editor.clearInterval(s.loadingTimer);
   s.loadingTimer = null; s.loadingFrame = 0; s.loadingNextAt = 0;
 }
-function syncLoading(s: Session): void {
-  if (!s.mounted || !s.state.pending) { stopLoading(s); return; }
-  if (s.loadingTimer !== null && s.loadingGeneration === s.state.generation) return;
-  stopLoading(s);
-  s.loadingGeneration = s.state.generation;
-  s.loadingNextAt = Date.now() + LOADING_STEP_MS;
-  s.loadingTimer = editor.setInterval(LOADING_STEP_MS, "search_everywhere_loading");
-}
-function loadingTick(): void {
-  const s = session;
-  // Native named callbacks may already be queued after clearInterval. The current
-  // owner's deadline also prevents an old tick from advancing a newly reset query.
-  if (!s || !s.mounted || s.loadingTimer === null || !valid(s) ||
-      !s.state.pending || s.loadingGeneration !== s.state.generation) return;
-  const now = Date.now();
-  if (now < s.loadingNextAt) return;
-  s.loadingNextAt = now + LOADING_STEP_MS;
-  s.loadingFrame++; draw(s);
-}
 function draw(s: Session): void {
   if (!valid(s)) { if (session === s) close(); return; }
-  syncLoading(s);
-  const notice = [...providers.values()].some(p => p.kind === "files") ? "" : "file provider not configured";
-  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame, editor.dockCols()));
+  const size = geometry();
+  if (!size) { close(); editor.setStatus("Too small: search needs 8 rows / 28 content columns"); return; }
+
+  if (s.state.pending && s.loadingTimer === null) {
+    s.loadingGeneration = s.state.generation; s.loadingNextAt = Date.now() + LOADING_STEP_MS;
+    s.loadingTimer = editor.setInterval(LOADING_STEP_MS, "search_everywhere_loading");
+  } else if (!s.state.pending) stopLoading(s);
+  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, index?.notice || "Type a literal query",
+    s.root, size.height, s.loadingFrame, size.width));
 }
 function invalidate(s: Session): void {
-  stopLoading(s);
-  s.state.generation++;
-  for (const cancel of s.cancel) cancel();
-  s.cancel = []; s.jobs.clear(); s.previewToken++; clearDecorations(s);
+  s.state.generation++; s.previewToken++; stopLoading(s); clearDecorations(s);
+  index?.cancelQuery();
 }
 function dismissOwned(s: Session): void {
   if (editor.activeWindow() !== s.windowId || editor.getAuthorityLabel() !== s.authority) return;
@@ -137,259 +82,248 @@ function dismissOwned(s: Session): void {
 }
 function close(keep = false): void {
   const s = session; session = null;
-  if (s) {
-    invalidate(s);
-    if (!keep && editor.activeWindow() === s.windowId && editor.getAuthorityLabel() === s.authority) {
-      dismissOwned(s);
-      if (editor.listSplits().some(p => p.splitId === s.splitId) && editor.getBufferInfo(s.original.bufferId)) {
-        editor.setSplitBuffer(s.splitId, s.original.bufferId);
-        editor.setBufferCursor(s.original.bufferId, s.cursor);
-        editor.setSplitScroll(s.splitId, s.original.viewport.topByte);
-      }
+  if (!s) return;
+  invalidate(s);
+  if (!keep && editor.activeWindow() === s.windowId && editor.getAuthorityLabel() === s.authority) {
+    dismissOwned(s);
+    if (editor.listSplits().some(p => p.splitId === s.splitId) && editor.getBufferInfo(s.original.bufferId)) {
+      editor.setSplitBuffer(s.splitId, s.original.bufferId); editor.setBufferCursor(s.original.bufferId, s.cursor);
+      editor.setSplitScroll(s.splitId, s.original.viewport.topByte);
     }
   }
-  if (timer !== null) editor.clearInterval(timer);
-  timer = null;
-  if (s?.mounted && editor.activeWindow() === s.windowId && editor.getAuthorityLabel() === s.authority) {
+  if (s.mounted && editor.activeWindow() === s.windowId && editor.getAuthorityLabel() === s.authority) {
     s.mounted = false; editor.unmountFloatingWidget(PANEL);
   }
+  stopIndex();
+}
+function stopIndex(): void {
+  index?.dispose(); index = null;
+
 }
 function dirty(s: Session, path: string): boolean {
-  return editor.listBuffers().some(b => b.window_id === s.windowId && canonicalPath(s.root, b.path) === canonicalPath(s.root, path) && b.modified);
+  return editor.listBuffers().some(b => b.window_id === s.windowId && b.modified && canonicalPath(s.root, b.path) === path);
+}
+async function decorate(s: Session, r: SearchResult, id: number, alive: () => boolean): Promise<void> {
+  const safe = () => alive() && s.state.selected === key(r) && !dirty(s, r.path) &&
+    editor.getActiveBufferId() === id && editor.getBufferInfo(id)?.path === r.path;
+  if (!safe() || r.kind !== "content") return;
+  const start = await editor.getLineStartPosition(r.line! - 1);
+  if (!safe() || start === null) return;
+  const end = await editor.getLineEndPosition(r.line! - 1);
+  if (!safe() || end === null || end < start) return;
+  const text = await editor.getBufferText(id, start, Math.min(end, start + 2401));
+  if (!safe() || !r.snippet || text.replace(/\r$/, "") !== r.snippet) return;
+  s.decorated.add(id);
+  editor.addOverlay(id, s.namespace + ":row", start, end, {bg: BRAND_PALETTE.previewRowBg, extendToLineEnd: true});
+  for (const [a, b] of previewMatches(r, s.state.query)) {
+    const from = utf16ToByte(r.snippet, a), to = utf16ToByte(r.snippet, b);
+    if (from !== null && to !== null && start + to <= end)
+      editor.addOverlay(id, s.namespace + ":match", start + from, start + to, {bg: BRAND_PALETTE.matchBg, bold: true});
+  }
+  await editor.flush(); if (!safe()) clearDecorations(s);
 }
 function preview(s: Session): void {
   if (!valid(s)) return;
-  const token = ++s.previewToken;
-  clearDecorations(s);
+  const token = ++s.previewToken; clearDecorations(s);
   const r = s.state.results.find(r => key(r) === s.state.selected);
   if (!r) { dismissOwned(s); s.preview = []; draw(s); return; }
   if (dirty(s, r.path)) {
-    dismissOwned(s); s.preview = [{text: "Unsaved edits: native saved preview/location unavailable"}]; draw(s); return;
+    dismissOwned(s); s.preview = [{text: "Unsaved buffer preserved; saved preview suppressed"}]; draw(s); return;
   }
-  // debt: preserve foreign transient tabs by declining browse; exact preview-state restoration is needed to browse alongside them.
   if (s.foreignPreview) { s.preview = [{text: "Existing preview preserved; Enter opens selected file"}]; draw(s); return; }
   if (s.previewBusy) return;
   s.previewBusy = true;
-  runPreview(s, r, token).catch(e => editor.setStatus(String(e)));
-}
-async function disposeOrphanPreview(s: Session, created: BufferInfo | undefined): Promise<void> {
-  // Esc may restore the pane before ownership is observed. Dispose only a new
-  // transient orphan; never restore an old layout after a replacement session opens.
-  if (!created || editor.activeWindow() !== s.windowId || editor.getAuthorityLabel() !== s.authority) return;
-  const current = editor.getBufferInfo(created.id);
-  const replacement = session;
-  const selected = replacement && replacement.state.results.find(v => key(v) === replacement.state.selected);
-  if (!current?.is_preview || current.modified || current.splits.length ||
-      editor.listSplits().some(p => p.bufferId === current.id) ||
-      replacement?.original.bufferId === current.id || selected?.path === current.path) return;
-  editor.closeBuffer(current.id);
-  await editor.flush();
-  const next = session;
-  if (next && valid(next)) {
-    next.foreignPreview = editor.listBuffers().some(b => b.window_id === next.windowId && b.is_preview && b.id !== next.ownedPreview);
-    preview(next);
-  }
+  void runPreview(s, r, token);
 }
 async function runPreview(s: Session, r: SearchResult, token: number): Promise<void> {
   const alive = () => valid(s) && token === s.previewToken;
   try {
-    // Flush before dispatch: stale callbacks must never open after teardown.
-    await editor.flush();
-    if (!alive()) return;
-    if (dirty(s, r.path)) { dismissOwned(s); s.preview = [{text: "Unsaved edits: preview unavailable"}]; draw(s); return; }
+    await editor.flush(); if (!alive() || dirty(s, r.path)) return;
     if (editor.listBuffers().some(b => b.window_id === s.windowId && b.is_preview && b.id !== s.ownedPreview)) {
       s.foreignPreview = true; s.preview = [{text: "Existing preview preserved; Enter opens selected file"}]; draw(s); return;
     }
     const beforeIds = new Set(editor.listBuffers().map(b => b.id));
-    editor.previewFileInSplit(s.splitId, r.path, r.line || 1, r.col || 1);
-    await editor.flush();
-    const created = editor.listBuffers().find(b => !beforeIds.has(b.id) && b.window_id === s.windowId &&
-      b.path === r.path && b.is_preview);
-    const pane = editor.listSplits().find(p => p.splitId === s.splitId);
-    const buffer = pane && editor.getBufferInfo(pane.bufferId);
-    if (buffer?.path === r.path && buffer.is_preview) s.ownedPreview = buffer.id;
-    if (!alive()) {
-      if (session !== s) await disposeOrphanPreview(s, created);
+    const owner = index;
+    if (!owner || !await owner.validate(r) || !alive() || dirty(s, r.path)) {
+      if (alive()) { s.preview = [{text: 'Selected source unsafe, changed or busy; retry selection'}]; draw(s); }
       return;
     }
-    if (dirty(s, r.path)) { dismissOwned(s); s.preview = [{text: "Unsaved edits: preview unavailable"}]; }
+    editor.previewFileInSplit(s.splitId, r.path, 1, 1);
+    await editor.flush();
+    // IDs are authority-local. Leave an orphan rather than resolve a foreign owner's ID.
+    if (!ownsWindow(s)) return;
+    const created = editor.listBuffers().find(b => !beforeIds.has(b.id) && b.window_id === s.windowId && b.path === r.path && b.is_preview);
+    const pane = editor.listSplits().find(p => p.splitId === s.splitId), buffer = pane && editor.getBufferInfo(pane.bufferId);
+    if (buffer?.path === r.path && buffer.is_preview) s.ownedPreview = buffer.id;
+    if (!alive()) {
+      if (ownsWindow(s) && created && !created.modified && !created.splits.length && !editor.listSplits().some(p => p.bufferId === created.id) && session?.original.bufferId !== created.id)
+        editor.closeBuffer(created.id);
+      return;
+    }
+    if (!await owner.validate(r) || !alive()) {
+      if (alive()) { dismissOwned(s); s.preview = [{text: 'Selected source identity changed; preview suppressed'}]; draw(s); }
+      return;
+    }
+    if (dirty(s, r.path)) { dismissOwned(s); s.preview = [{text: "Unsaved edits: saved preview suppressed"}]; }
     else {
       s.preview = buffer?.path === r.path ? [] : [{text: "Native file preview failed"}];
       if (buffer?.path === r.path) await decorate(s, r, buffer.id, alive);
     }
     if (alive()) draw(s);
-  } catch (error) {
-    if (alive()) {
-      clearDecorations(s);
-      s.preview = [{text: "Preview error: " + String(error)}];
-      draw(s);
-    }
-  } finally {
-    s.previewBusy = false;
-    if (valid(s) && token !== s.previewToken) preview(s);
-  }
+  } catch { if (alive()) { s.preview = [{text: "Preview unavailable"}]; draw(s); } }
+  finally { s.previewBusy = false; if (valid(s) && token !== s.previewToken) preview(s); }
 }
-function selectedResults(s: Session, results: SearchResult[]): void {
-  const before = s.state.selected;
-  replaceResults(s.state, rank(results, s.state.query, config.demotePaths, config.maxResults));
-  if (results.length > config.maxResults && !s.state.warnings.includes("Display limited after ranking")) s.state.warnings.push("Display limited after ranking");
-  draw(s);
-  if (before !== s.state.selected) preview(s);
-}
-function launch(s: Session, p: Provider, merge: SearchResult[], jobKey = JSON.stringify(["provider", p.name])): void {
-  const generation = s.state.generation;
-  const c = cancellation(s.root, s.windowId, s.state.query, Math.min(800, config.maxResults * 4), message => {
-    if (valid(s) && s.state.generation === generation && !c.ctx.cancelled) s.state.warnings.push(p.name + ": " + message);
-  }, error => editor.setStatus(p.name + ": cancellation callback failed: " + String(error)));
-  s.cancel.push(c.cancel); s.state.pending++;
-  let finished = false;
-  const job = {deadline: Date.now() + config.timeoutMs, timeout: () => { c.cancel(); finish(undefined, "timeout (cancel requested)"); }};
-  s.jobs.add(job);
-  function finish(results?: SearchResult[], error?: string): void {
-    if (finished) return;
-    finished = true; s.jobs.delete(job);
-    if (!valid(s) || s.state.generation !== generation) return;
-    s.state.pending--;
-    if (error) s.state.errors.push(p.name + ": " + error);
-    if (results) merge.push(...results);
-    selectedResults(s, merge);
-  }
-  // Keep only the latest queued query while an uncancellable call occupies this provider.
-  const start = () => {
-    if (!valid(s) || c.ctx.cancelled || s.state.generation !== generation) return;
-    busy.add(jobKey);
-    // Logical finish may happen at timeout; occupancy ends only at real settlement.
-    async function execute(): Promise<void> {
-      try {
-        const values = await p.search(c.ctx.query, c.ctx);
-        if (!isCurrent(s.state, generation, c.ctx) || !valid(s)) return;
-        const disk = await diskResults(editor, values, c.ctx);
-        if (!isCurrent(s.state, generation, c.ctx) || !valid(s)) return;
-        s.state.errors.push(...disk.errors.map(e => p.name + ": " + e));
-        s.state.warnings.push(...new Set(disk.warnings.map(w => p.name + ": " + w)));
-        finish(disk.results);
-      } catch (error) {
-        finish(undefined, String(error));
-      } finally {
-        busy.delete(jobKey);
-        if (!finished) finish();
-        const next = queued.get(jobKey);
-        queued.delete(jobKey);
-        if (next) next();
-      }
-    }
-    // Preserve deferred dispatch and catch every detached host callback path.
-    Promise.resolve().then(execute).catch(e => editor.setStatus(String(e)));
-  };
-  c.ctx.onCancel(() => { if (queued.get(jobKey) === start) queued.delete(jobKey); });
-  if (busy.has(jobKey)) queued.set(jobKey, start); else start();
-}
-function query(s: Session, runGrep = false): void {
+function query(s: Session, manual = false): void {
   if (!valid(s)) { close(); return; }
-  invalidate(s);
-  s.state.pending = 0; s.state.errors = []; s.state.warnings = []; s.state.armed = false;
+  invalidate(s); s.state.errors = []; s.state.warnings = []; s.state.pending = s.state.query ? 1 : 0;
   s.state.results = []; s.state.selected = null; s.preview = []; dismissOwned(s);
-  const merge: SearchResult[] = [];
-  if (s.state.query.trim()) {
-    if (runGrep) {
-      const override = [...providers.values()].filter(p => p.kind === "grep");
-      // A registered grep function replaces the entire backend, not only its flags.
-      const p = override[override.length - 1] || {name: "builtin-grep", kind: "grep" as const, search: (q, ctx) => grep(editor, q, ctx)};
-      launch(s, p, merge);
-    } else if (s.state.mode === "everywhere") {
-      for (const p of providers.values()) if (p.kind === "files" || p.kind === "symbols") launch(s, p, merge);
-      if (![...providers.values()].some(p => p.kind === "symbols")) {
-        // Explicit languages only: Fresh has no verified project-scoped runtime LSP registry.
-        for (const language of new Set(config.symbolLanguages)) {
-          launch(s, {name: "builtin-symbols:" + language, kind: "symbols",
-            search: (q, ctx) => symbolLanguage(editor, q, ctx, language)}, merge,
-            JSON.stringify(["lsp", language]));
-        }
-      }
-    }
-  }
+  const generation = s.state.generation;
+  index?.request(s.state.query, (results, warnings, error) => {
+    if (!valid(s) || generation !== s.state.generation) return;
+    s.state.pending = 0; s.state.warnings = warnings; s.state.errors = error ? [error] : [];
+    replaceResults(s.state, results); draw(s); preview(s);
+  });
   draw(s);
 }
 function open(): void {
   if (session?.mounted && valid(session)) { editor.floatingPanelControl(PANEL, "focus", 0); return; }
-  // debt: no generic dock push/pop API; browse only when the shared native slot is free.
-  // Check before teardown: even unmounting an old panel id can affect another window's dock.
-  if (editor.dockOpen()) {
-    editor.setStatus("Search Everywhere needs a free dock; existing panel preserved"); return;
-  }
+  const size = geometry();
+  if (!size) { editor.setStatus("Too small: search needs 8 rows / 28 content columns"); return; }
   close();
   const windowId = editor.activeWindow(), window = editor.listWindows().find(w => w.id === windowId);
-  if (!window || !window.root.startsWith("/")) { editor.setStatus("Search Everywhere requires an absolute POSIX project root"); return; }
   const original = editor.listSplits().find(p => p.splitId === editor.getActiveSplitId());
-  if (!original) return;
-  const s: Session = {state: initial(), windowId, splitId: editor.getActiveSplitId(), root: window.root,
-    authority: editor.getAuthorityLabel(), cancel: [], preview: [], previewToken: 0, previewBusy: false,
+  if (!window || !original) return;
+  const s: Session = {state: initial(), windowId, splitId: editor.getActiveSplitId(), windowRoot: window.root,
+    root: window.root, authority: editor.getAuthorityLabel(), preview: [], previewToken: 0, previewBusy: false,
     original, cursor: editor.getPrimaryCursor()?.position || 0, ownedPreview: null,
     foreignPreview: editor.listBuffers().some(b => b.window_id === windowId && b.is_preview), mounted: false,
     loadingTimer: null, loadingGeneration: 0, loadingFrame: 0, loadingNextAt: 0,
-    jobs: new Set(), decorated: new Set(), namespace: "search-everywhere:" + Date.now() + ":" + windowId + ":" + ++namespaceId};
+    decorated: new Set(), namespace: "search-everywhere:" + Date.now() + ":" + windowId + ":" + ++namespaceId};
   session = s;
-  s.mounted = editor.mountFloatingWidget(PANEL, spec(s.state, config.demotePaths, [], "file provider not configured", s.root, height(), 0, editor.dockCols()),
-    38, 100, true, false, "Search Everywhere", true, false, MODE);
+  s.mounted = editor.mountFloatingWidget(PANEL, spec(s.state, config.demotePaths, [], "Type a literal query", s.root,
+    size.height, 0, size.width), WIDTH_PCT, HEIGHT_PCT, false, false, "Search Everywhere", true, false, MODE);
   if (!s.mounted) { close(); return; }
-  timer = editor.setInterval(100, "search_everywhere_tick"); draw(s);
+  // HARD lazy boundary: nothing backend-related starts until the native mount succeeds.
+  if (!index?.alive() || index.windowId !== windowId || index.windowRoot !== window.root) {
+    stopIndex(); index = new Query(editor, windowId, window.root, s.authority, s.root, () => config, () => readSettings(editor));
+  }
+  query(s, true);
 }
-function enter(): void {
-  const s = session;
-  if (!s || !valid(s)) { close(); return; }
-  const action = enterAction(s.state);
-  if (action === "open") {
-    const r = s.state.results.find(r => key(r) === s.state.selected);
-    if (!r) return;
-    const modified = dirty(s, r.path);
-    // Disk coordinates are unsafe in an already dirty native buffer. Don't silently navigate there.
-    if (modified && r.kind !== "file") { s.state.errors.push("Selected file has unsaved edits; save before opening a location"); draw(s); return; }
-    close(true);
-    if (modified) editor.openFileInSplit(s.splitId, r.path);
-    else editor.openFileInSplit(s.splitId, r.path, r.line || 1, r.col || 1);
-  } else if (action === "grep") { s.state.mode = "grep"; query(s, true); }
-  else { editor.setStatus("Search pending, errored, or empty query; no automatic grep"); draw(s); }
+let opening = false;
+async function enter(): Promise<void> {
+  if (opening) return;
+  opening = true;
+  try { await openSelected(); } finally { opening = false; }
+}
+async function openSelected(): Promise<void> {
+  const s = session, owner = index;
+  if (!s || !owner || !valid(s)) { close(); return; }
+  if (enterAction(s.state) !== 'open') { editor.setStatus('Search pending, errored or empty; no location selected'); return; }
+  const r = s.state.results.find(r => key(r) === s.state.selected)!;
+  const generation = s.state.generation;
+  const alive = () => valid(s) && owner === index && generation === s.state.generation && s.state.selected === key(r);
+  try {
+    if (!await owner.validate(r) || !alive()) {
+      if (alive()) editor.setStatus('Selected source unsafe, changed or busy; retry Enter');
+      return;
+    }
+    const existing = editor.listBuffers().find(b => b.window_id === s.windowId && canonicalPath(s.root, b.path) === r.path);
+    if (existing?.modified) {
+      close(true); editor.setSplitBuffer(s.splitId, existing.id); editor.focusSplit(s.splitId);
+      editor.setStatus('Unsaved buffer preserved; saved search location not applied'); return;
+    }
+    // Native path APIs are not descriptor-pinned: a narrow check-to-open race remains.
+    editor.openFileInSplit(s.splitId, r.path);
+    editor.focusSplit(s.splitId);
+    await editor.flush();
+    if (!alive()) return;
+    if (editor.getActiveSplitId() !== s.splitId) {
+      editor.setStatus('Selected buffer or split changed; no search cursor applied'); return;
+    }
+    const pane = editor.listSplits().find(p => p.splitId === s.splitId);
+    const buffer = pane && editor.getBufferInfo(pane.bufferId);
+    if (!buffer || buffer.window_id !== s.windowId || canonicalPath(s.root, buffer.path) !== r.path) {
+      editor.setStatus('Native file open failed'); return;
+    }
+    // Line-position APIs refer to the active buffer, not the explicit getBufferText id.
+    const locationOwned = () => alive() && editor.getActiveSplitId() === s.splitId &&
+      editor.getActiveBufferId() === buffer.id &&
+      editor.listSplits().some(p => p.splitId === s.splitId && p.bufferId === buffer.id) &&
+      editor.getBufferInfo(buffer.id)?.path === r.path && !dirty(s, r.path);
+    const safeLocation = () => {
+      if (locationOwned()) return true;
+      if (alive()) editor.setStatus('Selected buffer or split changed; no search cursor applied');
+      return false;
+    };
+    if (!safeLocation() || !await owner.validate(r) || !safeLocation()) return;
+    if (r.kind === 'content' && !buffer.modified) {
+      if (!safeLocation()) return;
+      const start = await editor.getLineStartPosition(r.line! - 1);
+      if (!safeLocation()) return;
+      const end = await editor.getLineEndPosition(r.line! - 1);
+      if (!safeLocation()) return;
+      let offset: number | null = null;
+      if (start !== null && end !== null && end >= start && end - start <= 8193) {
+        const text = (await editor.getBufferText(buffer.id, start, end)).replace(/\r$/, '');
+        if (!safeLocation()) return;
+        const at = fold(text).indexOf(fold(s.state.query));
+        if (text === r.snippet && at >= 0) offset = utf16ToByte(text, at);
+      }
+      if (!safeLocation() || !await owner.validate(r) || !safeLocation()) return;
+      editor.setBufferCursor(buffer.id, offset !== null && start !== null ? start + offset : 0);
+      if (offset === null) editor.setStatus('Search source differs from current file; opened beginning');
+    }
+    if (!safeLocation()) return;
+    editor.focusSplit(s.splitId); close(true);
+  } catch (error) { if (alive()) { s.state.errors = ['Selected source validation failed: ' + String(error)]; draw(s); } }
 }
 registerHandler("search_everywhere_open", open);
-registerHandler("search_everywhere_enter", enter);
+registerHandler("search_everywhere_enter", () => { void enter(); });
 registerHandler("search_everywhere_close", () => close());
-registerHandler("search_everywhere_cleanup", retryDecorations);
-registerHandler("search_everywhere_loading", loadingTick);
-registerHandler("search_everywhere_tick", () => {
+registerHandler("search_everywhere_cleanup", () => { for (const c of pendingDecorations.values()) clearDecorations(c); });
+registerHandler("search_everywhere_loading", () => {
   const s = session;
-  if (!s) return;
-  if (!valid(s)) { close(); return; }
-  const selected = s.state.results.find(r => key(r) === s.state.selected);
-  if (selected && dirty(s, selected.path) && !s.preview.length) preview(s);
-  for (const job of s.jobs) if (Date.now() >= job.deadline) job.timeout();
+  if (!s || !valid(s) || !s.state.pending || s.loadingTimer === null || Date.now() < s.loadingNextAt) return;
+  s.loadingNextAt = Date.now() + LOADING_STEP_MS; s.loadingFrame++; draw(s);
+});
+registerHandler("search_everywhere_query", () => {
+  if (!index?.alive()) { close(); stopIndex(); return; }
+  index.tick();
 });
 registerHandler("search_everywhere_event", (ev: HookEventMap["widget_event"]) => {
   const s = session;
   if (!s || ev.panel_id !== PANEL || ev.window_id !== s.windowId) return;
   if (!valid(s) || ev.event_type === "cancel") { close(); return; }
   if (ev.widget_key === "query" && ev.event_type === "change") {
-    s.state.query = String(ev.payload.value || "").slice(0, 512); query(s);
-  } else if (ev.widget_key === "grep" && ev.event_type === "toggle") {
-    s.state.mode = ev.payload.checked ? "grep" : "everywhere"; query(s);
+    s.state.query = String(ev.payload.value || ""); query(s, true);
   } else if (ev.widget_key === "results" && ["select", "activate"].includes(ev.event_type)) {
     const r = s.state.results[Number(ev.payload.index)];
     if (r && (!ev.payload.key || ev.payload.key === key(r))) {
-      s.state.selected = key(r); s.state.armed = true; preview(s);
-      if (ev.event_type === "activate") enter();
+      s.state.selected = key(r); preview(s); if (ev.event_type === "activate") void enter();
     }
   }
 });
-registerHandler("search_everywhere_authority", close);
-registerHandler("search_everywhere_resize", () => { const s = session; if (s?.mounted && valid(s)) draw(s); });
-editor.on("resize", "search_everywhere_resize");
-editor.on("widget_event", "search_everywhere_event");
-editor.on("authority_changed", "search_everywhere_authority");
+registerHandler("search_everywhere_authority", () => { close(); stopIndex(); });
+registerHandler("search_everywhere_window_closed", (ev: HookEventMap["window_closed"]) => {
+  if (index?.windowId === ev.id) { close(); stopIndex(); }
+});
+registerHandler("search_everywhere_resize", () => { if (session?.mounted && valid(session)) draw(session); });
+registerHandler('search_everywhere_config', () => {
+  if (session) { session.previewToken++; session.state.results = []; session.preview = []; close(); }
+  stopIndex(); editor.setStatus('Search configuration changed; reopen Search Everywhere');
+});
+for (const [hook, handler] of [["resize", "resize"], ["widget_event", "event"], ["authority_changed", "authority"],
+  ["active_window_changed", "authority"], ["window_closed", "window_closed"], ['config_changed', 'config']] as const)
+  editor.on(hook, "search_everywhere_" + handler);
 editor.defineMode(MODE, [["Enter", "search_everywhere_enter", "shortcut"], ["Escape", "search_everywhere_close", "shortcut"]], true, true, false);
-editor.registerCommand("Search Everywhere", "Files provider, workspace symbols, and disk grep", "search_everywhere_open");
+editor.registerCommand("Search Everywhere", "Literal filename and content search · configured trunk/local provider", "search_everywhere_open");
 editor.exportPluginApi("search-everywhere", {
   configure(patch: Partial<Config>) { config = configure(config, patch); if (session) query(session); },
-  registerProvider(p: Provider) {
-    validateProvider(p); providers.set(p.name, p); if (session) query(session);
-    return () => { if (providers.get(p.name) === p) { providers.delete(p.name); if (session) query(session); } };
+  // Read-only readiness/ownership diagnostics contain no query or source/live text.
+  status() {
+    const mounted = !!session?.mounted && valid(session);
+    return {activated: index !== null, mounted, focus: mounted ? editor.getPanelFocusKey(PANEL) : "",
+      notice: index?.notice || "Inactive", settings: readSettings(editor), root: index?.root || null, results: session?.state.results.length || 0,
+      pending: session?.state.pending || 0};
   }
 });

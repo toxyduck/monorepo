@@ -1,43 +1,15 @@
-import {key, type SearchContext, type SearchResult} from "./model.ts";
-export type Mode = "everywhere" | "grep";
+import {key, type SearchResult} from "./model.ts";
 export interface State {
-  generation: number; query: string; mode: Mode; pending: number;
-  errors: string[]; warnings: string[]; results: SearchResult[]; selected: string | null; armed: boolean;
+  generation: number; query: string; pending: number;
+  errors: string[]; warnings: string[]; results: SearchResult[]; selected: string | null;
 }
 export function initial(): State {
-  return {generation: 0, query: "", mode: "everywhere", pending: 0, errors: [], warnings: [], results: [], selected: null, armed: false};
+  return {generation: 0, query: "", pending: 0, errors: [], warnings: [], results: [], selected: null};
 }
 export function replaceResults(s: State, results: SearchResult[]): void {
   s.results = results;
   if (!results.some(r => key(r) === s.selected)) s.selected = results[0] ? key(results[0]) : null;
 }
-export function enterAction(s: State): "open" | "grep" | "wait" {
-  if (s.mode === "grep") return s.armed && s.selected ? "open" : s.pending ? "wait" : "grep";
-  if (s.selected) return "open";
-  return s.pending || s.errors.length || s.warnings.length || !s.query.trim() ? "wait" : "grep";
-}
-export function cancellation(root: string, windowId: number, query: string, maxResults: number, warn: (message: string) => void = () => {}, reportCancelError: (error: unknown) => void = () => {}): {
-  ctx: SearchContext; cancel: () => void;
-} {
-  let cancelled = false;
-  const handlers = new Set<() => void>();
-  function invoke(fn: () => void): void {
-    try { fn(); }
-    catch (error) {
-      // Reporting must not interrupt the remaining callbacks or host teardown either.
-      try { reportCancelError(error); } catch {}
-    }
-  }
-  return {ctx: {root, windowId, query, maxResults, warn, get cancelled() { return cancelled; },
-    onCancel(fn) { if (cancelled) invoke(fn); else handlers.add(fn); return () => handlers.delete(fn); }},
-    cancel() {
-      if (cancelled) return;
-      cancelled = true;
-      const callbacks = [...handlers];
-      handlers.clear();
-      for (const fn of callbacks) invoke(fn);
-    }};
-}
-export function isCurrent(s: State, generation: number, ctx: SearchContext): boolean {
-  return s.generation === generation && !ctx.cancelled;
+export function enterAction(s: State): "open" | "wait" {
+  return s.results.some(r => key(r) === s.selected) ? "open" : "wait";
 }

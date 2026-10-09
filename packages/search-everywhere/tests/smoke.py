@@ -1,539 +1,78 @@
-"""Real Fresh PTY; only a disposable HOME and this known tiny fixture.
-Run: python3 tests/smoke.py /path/to/fresh
-No user's plugin installation/configuration is touched.
-"""
-import hashlib, os, pathlib, tempfile, subprocess, pty, select, time, fcntl, termios, struct, signal, json, sys
-source = pathlib.Path(__file__).resolve().parent.parent
-binary = sys.argv[1]
-base = pathlib.Path(tempfile.mkdtemp(prefix='fresh-search-smoke-'))
-root = base/'fixture'; root.mkdir(); (root/'build').mkdir()
-(root/'Foo.kt').write_text('class Foo { fun findUser() = "needle" }\n')
-(root/'Bar.kt').write_text('class Bar { val needle = 1 }\n')
-# The saved symbol must match the provider identity; production verifies it.
-(root/'界𐐀Long.kt').write_text('class 界𐐀'+'Long'*24+' { val needle = 1 }\n')
-# Distinct result keys are paths, not provider display names.
-for i in range(20): (root/f'Foo{i}.kt').write_text(f'class Foo{i} {{}}\n')
-(root/'Slow.py').write_text('pass\n')
-(root/'Error.json').write_text('{}\n')
-(root/'build'/'Foo.kt').write_text('class Foo { val needle = 2 }\n')
-(root/'Long.kt').write_text(('x'*1023+'\n')*70+'class Foo {}\n')
-sys.path.insert(0, str(source.parent / '_shared'))
-from native_demo import isolated_env, open_pty, launch, stop_process, record_event, write_source_copy
-env = isolated_env(base)
-c = base/'config'/'fresh'; plugins = c/'plugins'; (plugins/'lib').mkdir(parents=True)
-# Every disposable instrumentation anchor must match the approved source contract.
-def instrument(content, old, new):
-    assert content.count(old) == 1, ("Native instrumentation anchor must be unique", old, content.count(old))
-    return content.replace(old, new)
-# Explicit files only: no repository/home/project traversal.
-production_files = ['search_everywhere.ts', 'lib/config.ts', 'lib/model.ts', 'lib/providers.ts', 'lib/rank.ts', 'lib/search.ts', 'lib/ui.ts']
-for name in production_files:
-    content=(source/name).read_text()
-    if name=='search_everywhere.ts':
-        # Only context getters are controlled: namespaces/buffers/flush remain actual native APIs.
-        content=instrument(content, 'const editor = getEditor();', 'const editor = getEditor(); const nativeUpdateOutcomes=[]; const nativeWindow=editor.activeWindow.bind(editor), nativeAuthority=editor.getAuthorityLabel.bind(editor); let testContext="same"; editor.activeWindow=()=>testContext==="window"?nativeWindow()+10000:nativeWindow(); editor.getAuthorityLabel=()=>testContext==="authority"?"fixture-other-authority":nativeAuthority();')
-        content += '\nfor (const mode of ["window","authority","same"]) { const h="smoke_context_"+mode; registerHandler(h,()=>{testContext=mode;}); editor.registerCommand("Smoke Context "+mode,"",h); }\nregisterHandler("smoke_cleanup_state",()=>editor.replaceFile(editor.localPath('+json.dumps(str(base/'cleanup.json'))+'),JSON.stringify({session:session!==null,pending:pendingDecorations.size,timer:cleanupTimer}))); editor.registerCommand("Smoke Cleanup State","","smoke_cleanup_state");\n'
-        # Controlled scheduler interleaving in the disposable copy, not native API stubs.
-        marker=json.dumps(str(base/'close-after-dispatch'))
-        race=json.dumps(str(base/'race.json'))
-        target='    await editor.flush();\n    const created ='
-        assert target in content
-        content=instrument(content, target, '    await editor.flush();\n    if (r.path.endsWith("/build/Foo.kt") && editor.readFile(editor.localPath('+marker+')) === "armed") {\n      editor.replaceFile(editor.localPath('+marker+'), "done"); close(); await editor.flush();\n      editor.replaceFile(editor.localPath('+race+'), JSON.stringify({buffers:editor.listBuffers(),panes:editor.listSplits()}));\n    }\n    const created =')
-        content=instrument(content, '    editor.setStatus("Search Everywhere needs a free dock; existing panel preserved"); return;',
-            '    editor.replaceFile(editor.localPath('+json.dumps(str(base/'refusal.json'))+'),JSON.stringify({status:"Search Everywhere needs a free dock; existing panel preserved"})); editor.setStatus("Search Everywhere needs a free dock; existing panel preserved"); return;')
-        content=instrument(content, 'registerHandler("search_everywhere_close", () => close());', 'registerHandler("search_everywhere_close", () => close()); editor.registerCommand("Smoke No Session Close","","search_everywhere_close");')
-        # Observation only in the disposable copy: same native methods/controller, no mocked routes.
-        content=instrument(content, '  editor.updateFloatingWidget(PANEL, spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame, editor.dockCols()));',
-            '  const tree=spec(s.state, config.demotePaths, s.preview, notice, s.root, height(), s.loadingFrame, editor.dockCols()); editor.replaceFile(editor.localPath('+json.dumps(str(base/'ui.json'))+'),JSON.stringify({state:s.state,tree,dockCols:editor.dockCols()})); const outcome=editor.updateFloatingWidget(PANEL,tree); editor.replaceFile(editor.localPath('+json.dumps(str(base/'update-outcome.json'))+'),JSON.stringify({outcome,outcomes:[...nativeUpdateOutcomes,outcome]})); nativeUpdateOutcomes.push(outcome);')
-        content=instrument(content, '  const s = session;\n  if (!s || ev.panel_id',
-            '  editor.replaceFile(editor.localPath('+json.dumps(str(base/'last-widget.json'))+'),JSON.stringify(ev)); const s = session;\n  if (!s || ev.panel_id')
-        content=instrument(content, '  const line = text.replace', '  editor.replaceFile(editor.localPath('+json.dumps(str(base/'decoration.json'))+'),JSON.stringify({start,end,text,snippet:r.snippet,safe:safe()})); const line = text.replace')
-        content=instrument(content, 'const editor = getEditor();', 'const editor = getEditor(); const originalSpawn=editor.spawnProcess.bind(editor); editor.spawnProcess=(...args)=>{editor.replaceFile(editor.localPath('+json.dumps(str(base/'spawn.json'))+'),JSON.stringify(args));return originalSpawn(...args);};')
-        content=instrument(content, 's.mounted = false; editor.unmountFloatingWidget(PANEL);','s.mounted = false; editor.unmountFloatingWidget(PANEL); editor.replaceFile(editor.localPath('+json.dumps(str(base/'lifecycle.json'))+'),JSON.stringify({open:session!==null,queued:queued.size,busy:[...busy]}));')
-    write_source_copy(source/name, plugins/name, lambda _: content)
-# ui.ts resolves ../../_shared from config/fresh/plugins/lib.
-native_sources = {
-    'packages/search-everywhere/' + name: dict(source_sha256=hashlib.sha256((source/name).read_bytes()).hexdigest(), copy_sha256=hashlib.sha256((plugins/name).read_bytes()).hexdigest(), instrumented=name == 'search_everywhere.ts')
-    for name in production_files}
-for name in ['runtime_brand.ts', 'runtime_icons.ts']:
-    shared=c/'_shared'/name
-    hashes=write_source_copy(source.parent/'_shared'/name,shared)
-    native_sources['packages/_shared/'+name]=dict(**hashes,instrumented=False)
-(base/'native-source-manifest.json').write_text(json.dumps(native_sources, indent=2)+'\n')
-fake = base/'fake_lsp.py'
-fake.write_text((source/'tests'/'fake_lsp.py').read_text())
-(c/'config.json').write_text(json.dumps({'version':2, 'check_for_updates':False, 'self_update':False,
-    'orchestrator_mode':False, 'keybindings':[{'key':'s','modifiers':['alt'],'action':'search_everywhere_open'}], 'lsp': {'kotlin':[{'command':'python3','args':[str(fake),str(root),str(base/'lsp.jsonl')],
-    'enabled':True,'auto_start':True,'root_markers':[]}],
-    'python':[{'command':'python3','args':[str(fake),str(root),str(base/'slow-lsp.jsonl'),'slow'],
-        'enabled':True,'auto_start':True,'root_markers':[]}],
-    'json':[{'command':'python3','args':[str(fake),str(root),str(base/'error-lsp.jsonl'),'error'],
-        'enabled':True,'auto_start':True,'root_markers':[]}]}, 'editor': {'restore_previous_session':False}}))
-init = '''(async function(){const editor=getEditor(); const dest=DEST; const events=[];
-function record(v){events.push(v);editor.replaceFile(editor.localPath(dest),JSON.stringify(events));}
-const request=REQUEST, response=RESPONSE;const previous=editor.readFile(editor.localPath(request));let last=previous?JSON.parse(previous).id:0;
-registerHandler("smoke_bridge",async()=>{try{const raw=editor.readFile(editor.localPath(request));if(!raw)return;const r=JSON.parse(raw);if(r.id===last)return;last=r.id;await editor.runCommand(r.name);editor.replaceFile(editor.localPath(response),JSON.stringify({id:r.id}));}catch(e){record({bridgeError:String(e)});}});editor.setInterval(50,"smoke_bridge");
-try {
-record({freshSession:editor.getEnv("FRESH_SESSION"),grammars:editor.listGrammars().filter(g=>g.name.toLowerCase().includes("kotlin"))});const api=editor.getPluginApi("search-everywhere"); if(!api)throw new Error("API absent");
-record({stage:"configure",apiKeys:Object.keys(api)});api.configure({symbolLanguages:["kotlin"],timeoutMs:2000});
-api.registerProvider({name:"fixture-files",kind:"files",async search(q,ctx){record({files:q});
-if(q==="slow") await editor.delay(700);
-if(q==="readerror")return [{kind:"file",path:ctx.root+"/Missing.kt",name:"Missing"}];
-if(q==="long")return [{kind:"symbol",path:ctx.root+"/Long.kt",name:"Foo",line:71,col:7}];
-if(q==="manyfoo")return Array.from({length:20},(_,i)=>({kind:"file",path:ctx.root+"/Foo"+i+".kt",name:"Foo"+i}));
-if(q==="界")return [{kind:"symbol",path:ctx.root+"/界𐐀Long.kt",name:"界𐐀"+"Long".repeat(24),line:1,col:7}];
-if(!q.toLowerCase().includes("foo"))return [];
-return [{kind:"file",path:ctx.root+"/Foo.kt",name:"Foo"},{kind:"file",path:ctx.root+"/build/Foo.kt",name:"Foo"}];}});
-record({stage:"files registered"});registerHandler("smoke_events",ev=>record(ev));editor.on("widget_event","smoke_events");
-let remove=null;
-registerHandler("smoke_override",()=>{remove=api.registerProvider({name:"fixture-grep",kind:"grep",async search(q,ctx){record({override:q});return [{kind:"content",path:ctx.root+"/Bar.kt",name:"CUSTOM",line:1,col:17,snippet:'class Bar { val needle = 1 }',matches:{snippet:[[16,22]]}},{kind:"content",path:ctx.root+"/Foo.kt",name:"CUSTOM",line:1,col:31,snippet:'class Foo { fun findUser() = "needle" }',matches:{snippet:[[30,36]]}}];}});});
-editor.registerCommand("Smoke Override","","smoke_override");
-registerHandler("smoke_remove",()=>{if(remove)remove();});editor.registerCommand("Smoke Remove","","smoke_remove");
-registerHandler("smoke_reload",()=>editor.reloadInit());editor.registerCommand("Smoke Reload","","smoke_reload");
-registerHandler("smoke_foreign_overlay",()=>editor.addOverlay(editor.findBufferByPath(ROOT+"/Foo.kt"),"foreign-fixture",10,11,{bg:[200,0,180]}));editor.registerCommand("Smoke Foreign Overlay","","smoke_foreign_overlay");
-registerHandler("smoke_snapshot",async()=>{await editor.flush();record({buffers:editor.listBuffers(),panes:editor.listSplits(),dockOpen:editor.dockOpen(),fixtureFocus:editor.getPanelFocusKey(73621),syntax:await editor.getHighlights(editor.getActiveBufferId(),0,40),active:editor.getActiveBufferId(),cursor:editor.getPrimaryCursor(),handlers:editor.getHandlers("widget_event")});});
-editor.registerCommand("Smoke Snapshot","","smoke_snapshot");
-registerHandler("smoke_dirty",()=>editor.insertText(editor.findBufferByPath(ROOT+"/Foo.kt"),0,"// unsaved\\n"));editor.registerCommand("Smoke Dirty","","smoke_dirty");
-registerHandler("smoke_clean",()=>{const id=editor.findBufferByPath(ROOT+"/Foo.kt");editor.deleteRange(id,0,11);editor.saveBufferToPath(id,ROOT+"/Foo.kt");});editor.registerCommand("Smoke Clean","","smoke_clean");
-registerHandler("smoke_foreign",()=>editor.previewFileInSplit(editor.getActiveSplitId(),ROOT+"/build/Foo.kt",1,1));editor.registerCommand("Smoke Foreign","","smoke_foreign");
-registerHandler("smoke_dismiss",()=>editor.dismissPreview());editor.registerCommand("Smoke Dismiss","","smoke_dismiss");
-registerHandler("smoke_split",async()=>{await editor.splitWindow({direction:"vertical",place:"before",ratio:.3,keepFocus:true});});editor.registerCommand("Smoke Split","","smoke_split");
-registerHandler("smoke_occupied",()=>editor.mountFloatingWidget(73621,{kind:"text",key:"fixture",label:"Fixture dock preserved",value:"native content",focused:true},30,100,true,false,"Owned fixture",true,false));editor.registerCommand("Smoke Occupied Dock","","smoke_occupied");
-registerHandler("smoke_free",()=>editor.unmountFloatingWidget(73621));editor.registerCommand("Smoke Free Dock","","smoke_free");
-registerHandler("smoke_parallel",()=>api.configure({symbolLanguages:["kotlin","python","json","kotlin"],timeoutMs:1200}));editor.registerCommand("Smoke Parallel","","smoke_parallel");
-registerHandler("smoke_symbols_override",()=>{remove=api.registerProvider({name:"fixture-symbols",kind:"symbols",async search(q,ctx){record({symbolOverride:q});return [{kind:"symbol",path:ctx.root+"/Foo.kt",name:"Foo",line:1,col:7}];}});});editor.registerCommand("Smoke Symbols Override","","smoke_symbols_override");
-registerHandler("smoke_demo_timeout",()=>api.configure({timeoutMs:4000}));editor.registerCommand("Smoke Demo Timeout","","smoke_demo_timeout");
-registerHandler("smoke_theme_timeout",()=>api.configure({timeoutMs:6000}));editor.registerCommand("Smoke Theme QA Timeout","","smoke_theme_timeout");
-const builtin=editor.getBuiltinThemes(); const dark=JSON.parse(builtin.dark); const light=JSON.parse(builtin.light);
-const custom=JSON.parse(builtin.dark);custom.name="fixture-semantic";custom.ui.help_key_fg=[240,190,90];custom.ui.popup_text_fg=[225,235,245];custom.ui.popup_selection_fg=[250,250,250];custom.ui.popup_selection_bg=[55,70,95];custom.editor.line_number_fg=[150,160,175];custom.editor.current_line_bg=[35,45,60];custom.search.match_bg=[80,55,100];
-editor.saveThemeFile(custom.name,JSON.stringify(custom));editor.reloadThemes();
-for(const name of ["dark","light","fixture-semantic"]){registerHandler("smoke_theme_"+name,()=>{const ok=editor.applyTheme(name);record({theme:name,ok,data:editor.getThemeData(name)});editor.replaceFile(editor.localPath(THEMEMETA),JSON.stringify({name,data:editor.getThemeData(name)}));});editor.registerCommand("Smoke Theme "+name,"","smoke_theme_"+name);}
-editor.applyTheme("dark");editor.replaceFile(editor.localPath(THEMEMETA),JSON.stringify({name:"dark",data:editor.getThemeData("dark")}));
-registerHandler("smoke_cancel_fixture",()=>{api.configure({timeoutMs:450});remove=api.registerProvider({name:"fixture-cancel",kind:"symbols",async search(q,ctx){ctx.onCancel(()=>{record({cancelFirst:q});throw new Error("Owned cancellation callback failure");});ctx.onCancel(()=>record({cancelSecond:q}));record({cancelBusy:q});while(!editor.readFile(editor.localPath(CANCELRELEASE+q)))await editor.delay(30);record({cancelSettled:q});throw new Error("Owned stale provider rejection");}});});editor.registerCommand("Smoke Cancel Fixture","","smoke_cancel_fixture");
-record({stage:"await auto-start LSP"});await editor.delay(800);
-for(const file of ["Slow.py","Error.json","Foo.kt"]){editor.openFileInSplit(editor.getActiveSplitId(),ROOT+"/"+file);await editor.flush();await editor.delay(300);}
-try{record({lsp:await editor.sendLspRequest("kotlin","workspace/symbol",{query:"Foo"})});}catch(e){record({lspError:String(e)});}
-record({nativeSyntax:await editor.getHighlights(editor.getActiveBufferId(),0,40)});
-record({initialPanes:editor.listSplits(),dockCols:editor.dockCols()});record({ready:true});if(last)editor.replaceFile(editor.localPath(response),JSON.stringify({id:last}));
-}catch(e){record({error:String(e)});}
-})().catch(e=>getEditor().setStatus(String(e)));'''.replace('CANCELRELEASE',json.dumps(str(base/'cancel-release-'))).replace('THEMEMETA',json.dumps(str(base/'theme-meta.json'))).replace('ROOT',json.dumps(str(root))).replace('DEST',json.dumps(str(base/'events.json'))).replace('REQUEST',json.dumps(str(base/'request.json'))).replace('RESPONSE',json.dumps(str(base/'response.json')))
-(c/'init.ts').write_text(init)
-m,s = open_pty(36,130)
-p = None; data = bytearray(); phases = []; known_children = {}
-clock = time.monotonic(); recording = []
-def record(kind, **fields):
-    record_event(recording,clock,len(data),kind,**fields)
-record('resize', rows=36, columns=130)
-def typed(text, wait=1):
-    for char in text: keys(char.encode(), .15)
-    pump(wait)
-def child_tree(pid):
-    try:
-        children=pathlib.Path('/proc/'+str(pid)+'/task/'+str(pid)+'/children').read_text().split()
-    except (FileNotFoundError, ProcessLookupError):return
-    for child in children:
-        try:
-            fields=pathlib.Path('/proc/'+child+'/stat').read_text().rsplit(')',1)[1].split()
-            known_children[int(child)]=fields[19]
-            child_tree(int(child))
-        except (FileNotFoundError, ProcessLookupError):pass
-def live_children():
-    live=[]
-    for pid,start in known_children.items():
-        try:
-            fields=pathlib.Path('/proc/'+str(pid)+'/stat').read_text().rsplit(')',1)[1].split()
-            if fields[19]==start and fields[0]!='Z':live.append(pid)
-        except (FileNotFoundError, ProcessLookupError):pass
-    return live
-def pump(t):
-    end = time.monotonic()+t
-    while time.monotonic()<end:
-        if p and p.poll() is None:child_tree(p.pid)
-        if select.select([m],[],[],.04)[0]:
-            try: b=os.read(m,65536)
-            except OSError: break
-            start=len(data); data.extend(b)
-            assert len(data)<=16*1024*1024, 'ANSI recording cap exceeded'
-            record('chunk', start=start)
-            if b'\x1b[6n' in b: os.write(m,b'\x1b[1;1R')
-            if b'\x1b[c' in b: os.write(m,b'\x1b[?1;2c')
-def keys(b, wait=.4): os.write(m,b);pump(wait)
-request_id=0
-def command(name):
-    global request_id
-    request_id+=1
-    (base/'request.json').write_text(json.dumps({'id':request_id,'name':name}))
-    end=time.monotonic()+3
-    while time.monotonic()<end:
-        pump(.05)
-        if (base/'response.json').exists() and json.loads((base/'response.json').read_text()).get('id')==request_id:
-            pump(.2);return
-    raise AssertionError((name,'test bridge did not respond',events()))
-def node(tree, key):
-    if tree.get('key') == key: return tree
-    for child in tree.get('children', []) + ([tree['child']] if 'child' in tree else []):
-        result = node(child, key)
-        if result is not None: return result
-    return None
-def events(): return json.loads((base/'events.json').read_text())
-def mark(name):
-    command('Smoke Snapshot'); record('phase', name=name); phases.append({'phase':name,'events':events(),'ansiBytes':len(data),
-        'ui':json.loads((base/'ui.json').read_text()),'widget':json.loads((base/'last-widget.json').read_text()) if (base/'last-widget.json').exists() else None})
-native_cells=[]
-def native_picker_proof(name, controls=False):
-    # Replay actual PTY writes/resize events, never the observed widget JSON.
-    import pyte
-    from demo import theme_color
-    screen=pyte.Screen(130,36);stream=pyte.ByteStream(screen)
-    for event in recording:
-        if event['type']=='chunk':stream.feed(bytes(data[event['start']:event['offset']]))
-        elif event['type']=='resize':screen.resize(lines=event['rows'],columns=event['columns'])
-    outcomes=json.loads((base/'update-outcome.json').read_text())['outcomes']
-    assert outcomes and all(outcome is True for outcome in outcomes), (name,'Native update rejected',outcomes)
-    observed=json.loads((base/'ui.json').read_text());cols=observed['dockCols']
-    theme=json.loads((base/'theme-meta.json').read_text())['data']
-    bg=theme_color(theme,'ui.popup_selection_bg');fg=theme_color(theme,'ui.popup_selection_fg')
-    match=theme_color(theme,'search.match_bg')
-    selected=[(y,row) for y,row in enumerate(screen.display) if row.startswith('> ')]
-    assert len(selected)==1,(name,'Selected native row missing',screen.display)
-    y,row=selected[0];inner=cols-1
-    cells=[screen.buffer[y][x] for x in range(inner)]
-    evidence=dict(phase=name,terminal=[screen.columns,screen.lines],dockCols=cols,row=y,innerWidth=inner,
-        text=row[:inner],cells=[dict(col=x,text=c.data,fg=c.fg,bg=c.bg,bold=c.bold) for x,c in enumerate(cells)])
-    native_cells.append(evidence);(base/'picker-cell-evidence.json').write_text(json.dumps(native_cells,indent=2))
-    assert node(observed['tree'],'query')['focused'] is True
-    assert all(c.bg in (bg,match) for c in cells),(name,'Selection fails actual full inner row',evidence)
-    assert all(c.fg==fg for c in cells if c.data.strip()),(name,'Selection foreground fails',evidence)
-    assert screen.buffer[y][inner-1].bg==bg,(name,'Selection does not reach blank/right edge',evidence)
-    assert not any(screen.buffer[y][x].bg==bg for x in range(cols,screen.columns)),(name,'Selection bleeds into preview',evidence)
-    other_bands=[yy for yy in range(screen.lines) if yy!=y and screen.buffer[yy][0].bg==bg]
-    assert not other_bands,(name,'Old selected row not cleared',other_bands)
-    unselected=[yy for yy,r in enumerate(screen.display) if r.startswith('   ')]
-    if unselected:
-        colors={screen.buffer[yy][xx].fg for yy in unselected for xx in range(inner) if screen.buffer[yy][xx].data.strip()}
-        evidence['unselected_foregrounds']=sorted(colors)
-        assert theme_color(theme,'editor.line_number_fg') in colors,(name,'Native metadata role absent/unreadable',evidence)
-        assert theme_color(theme,'syntax.type') in colors,(name,'Native icon role absent',evidence)
-        assert theme_color(theme,'ui.popup_text_fg') in colors,(name,'Native identity role absent',evidence)
-        (base/'picker-cell-evidence.json').write_text(json.dumps(native_cells,indent=2))
-    if controls:
-        visible='\n'.join(r[:inner] for r in screen.display)
-        # Only the narrow six-row layout uses compact native raw key labels.
-        labels=['Query','Grep','↑↓','Tab','↵','Esc'] if screen.lines==6 and cols<48 else ['Query','Grep','↑/↓','Tab','Enter','Esc']
-        assert all(label in visible for label in labels),(name,'Native controls clipped',visible)
-        evidence['visible_controls']=visible
-        (base/'picker-cell-evidence.json').write_text(json.dumps(native_cells,indent=2))
-    return screen
+"""Native config-layer proof in disposable HOME/XDG. No user session or Arc query."""
+import json
+import os
+from pathlib import Path
+import pty
+import select
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+import fcntl
 
-def interrupted(signum, frame):
-    raise RuntimeError('Smoke interrupted; cleaning owned processes')
-signal.signal(signal.SIGTERM, interrupted)
+from check import isolated_env
+
+base = Path(tempfile.mkdtemp(prefix='fresh-remote-native-', dir='/tmp'))
+env = isolated_env(base)
+env['TERM'] = 'xterm-256color'
+root = base / 'project'
+root.mkdir()
+(root / 'example.txt').write_text('fixture only\n')
+config = base / 'config/fresh'
+config.mkdir()
+package = config / 'plugins/packages/search-everywhere'
+package.mkdir(parents=True)
+source = Path(__file__).resolve().parent.parent / 'dist'
+for name in ('package.json', 'search-everywhere.ts', 'search_backend.py', 'README.md'):
+    shutil.copyfile(source / name, package / name)
+(config / 'config.json').write_text(json.dumps({'version': 2, 'check_for_updates': False,
+    'self_update': False, 'orchestrator_mode': False, 'lsp': {}, 'editor': {'restore_previous_session': False},
+    'plugins': {'search-everywhere': {'settings': {'backend': 'remote', 'arcBackend': 'rg'}}}}))
+(config / 'config_linux.json').write_text(json.dumps({'plugins': {'search-everywhere': {
+    'settings': {'backend': 'rg', 'arcBackend': 'remote'}}}}))
+# A separate fixture plugin declares the same native fields, so getPluginConfig belongs to it.
+probe = config / 'plugins/packages/config-probe'
+probe.mkdir(parents=True)
+(probe / 'package.json').write_text(json.dumps({'name': 'config-probe', 'version': '1.0.0', 'type': 'plugin',
+    'fresh': {'entry': 'config-probe.ts', 'min_version': '0.5.2'}}))
+for file in ('config.json', 'config_linux.json'):
+    values = json.loads((config / file).read_text())
+    values['plugins']['config-probe'] = values['plugins']['search-everywhere']
+    (config / file).write_text(json.dumps(values))
+(probe / 'config-probe.ts').write_text('''const e=getEditor();
+e.defineConfigEnum('backend',{values:['rg','remote'],default:'remote'});
+e.defineConfigEnum('arcBackend',{values:['rg','remote'],default:'rg'});
+let timer;
+registerHandler('probe_ready',()=>{const api=e.getPluginApi('search-everywhere');if(!api)return;
+e.replaceFile(e.localPath(PROOF),JSON.stringify({probe:e.getPluginConfig(),native:api.status()}));e.clearInterval(timer);});
+timer=e.setInterval(40,'probe_ready');
+'''.replace('PROOF', json.dumps(str(base / 'config-proof.json'))))
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 110, 0, 0))
+p = subprocess.Popen([sys.argv[1], '--no-upgrade-check', '--no-restore', str(root / 'example.txt')],
+    cwd=root, env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
 try:
-    p=launch(binary,root/'Foo.kt',root,env,s)
-    os.close(s);pump(3)
-    ready_deadline=time.monotonic()+4
-    while not any(e.get('ready') for e in events()) and time.monotonic()<ready_deadline: pump(.1)
-    assert any(e.get('ready') for e in events()),events()
-    def snapshot():
-        command('Smoke Snapshot');return next(e for e in reversed(events()) if 'buffers' in e)
-    def chrome_bytes():
-        path=base/'data'/'fresh'/'chrome.json';return path.read_bytes() if path.exists() else None
-    occupied=snapshot();chrome_before=chrome_bytes()
-    assert occupied['dockOpen'] and occupied['panes'][0]['x']==36,occupied
-    keys(b'\x1bs');after=snapshot()
-    assert after==occupied and chrome_bytes()==chrome_before,(occupied,after)
-    assert not any('files' in e or 'override' in e for e in events())
-    assert not (base/'ui.json').exists()
-    assert json.loads((base/'refusal.json').read_text())['status']=='Search Everywhere needs a free dock; existing panel preserved'
-    phases.append({'phase':'occupied initial native dock refused unchanged','before':occupied,'after':after,'chromeUnchanged':True})
-    # Only test setup closes the fixture's bundled dock through its known native handler.
-    command('Orchestrator: Toggle Dock');assert not snapshot()['dockOpen']
-    command('Smoke Occupied Dock');occupied=snapshot();chrome_before=chrome_bytes()
-    assert occupied['fixtureFocus']=='fixture',occupied
-    keys(b'\x1bs');command('Smoke No Session Close');after=snapshot()
-    assert after==occupied and chrome_bytes()==chrome_before,(occupied,after)
-    assert not any('files' in e for e in events())
-    phases.append({'phase':'foreign same-id fixture dock/content preserved on refused open and no-session close','before':occupied,'after':after,'chromeUnchanged':True})
-    command('Smoke Free Dock');free=snapshot();assert not free['dockOpen']
-    command('Smoke Foreign Overlay');command('Smoke Snapshot');phases.append({'phase':'native baseline foreign overlay','ansiBytes':len(data)})
-    record('phase', name='demo-foo-start')
-    (base/'demo-lsp-delay').write_text('2.8')
-    command('Smoke Demo Timeout')
-    keys(b'\x1bs');keys(b'Foo',.28)
-    assert json.loads((base/'ui.json').read_text())['state']['pending'] > 0
-    record('phase', name='demo-spinner-a')
-    pump(.19);record('phase', name='demo-spinner-b')
-    pump(2.7);(base/'demo-lsp-delay').unlink()
-    mark('native bind; live files and fake LSP')
-    native_picker_proof('full query-focused selection',controls=True)
-    keys(b'\x1b[B');mark('demo-foo-arrow');native_picker_proof('down clears old full selection')
-    keys(b'\x1b[A');mark('demo-foo-end');native_picker_proof('up restores full selection')
-    state=phases[-1]['ui']['state'];assert not state['pending'] and not state['errors'],state
-    assert [r['kind'] for r in state['results']]==['file','symbol','file'],state
-    tree=phases[-1]['ui']['tree'];listing=node(tree, 'results');entries=listing['items']
-    assert 'itemSpecs' not in listing
-    assert entries[2]['text'].startswith('   Foo.kt:1') and entries[2]['text'].endswith(' · generated')
-    assert entries[2]['style']['fg']=='ui.popup_text_fg'
-    assert any(o['style'].get('fg')=='editor.line_number_fg' for o in entries[2]['inlineOverlays'])
-    snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
-    assert snap['panes'][0]['x']==next(e['dockCols'] for e in events() if 'initialPanes' in e) and snap['panes'][0]['width']>65,snap
-    assert snap['syntax'], 'Actual native Kotlin buffer has no syntax spans'
-    assert not any('syntax preview unavailable' in str(c) for c in tree['children'])
-    theme_evidence=[]
-    for name in ['light','fixture-semantic','dark']:
-        before=snapshot(); calls=sum('files' in e for e in events());command('Smoke Theme '+name);after=snapshot()
-        assert before['panes']==after['panes'] and calls==sum('files' in e for e in events()), 'Idle theme changed preview/providers'
-        # applyTheme animates colors; measure after its native transition settles.
-        pump(.3);native_picker_proof('theme idle '+name,controls=True)
-        record('phase',name='theme-idle-'+name)
-        theme_evidence.append(dict(state='idle',name=name,data=json.loads((base/'theme-meta.json').read_text())['data'],panesUnchanged=True,providerCallsUnchanged=True))
-    # Theme animation settling/replay QA is outside both showcase clips.
-    command('Smoke Theme QA Timeout');(base/'demo-lsp-delay').write_text('5')
-    before_query=sum('files' in e for e in events())
-    keys(b'X',.05);keys(b'\x7f',.1)
-    dispatch_deadline=time.monotonic()+2
-    while sum('files' in e for e in events())<=before_query or next(e['files'] for e in reversed(events()) if 'files' in e)!='Foo':
-        assert time.monotonic()<dispatch_deadline, 'Theme fixture query did not dispatch'
-        pump(.05)
-    # Count after the query's normal debounce/dispatch, not before it.
-    for name in ['light','fixture-semantic','dark']:
-        assert json.loads((base/'ui.json').read_text())['state']['pending']>0
-        calls=sum('files' in e for e in events());command('Smoke Theme '+name)
-        assert calls==sum('files' in e for e in events()), 'Pending theme reran provider'
-        pump(.3);native_picker_proof('theme pending '+name,controls=True)
-        assert json.loads((base/'ui.json').read_text())['state']['pending']>0, 'Theme QA must still be pending after native settling'
-        record('phase',name='theme-pending-'+name)
-        theme_evidence.append(dict(state='pending',name=name,data=json.loads((base/'theme-meta.json').read_text())['data'],providerCallsUnchanged=True))
-    pump(5);(base/'demo-lsp-delay').unlink();command('Smoke Demo Timeout');(base/'theme-evidence.json').write_text(json.dumps(theme_evidence,indent=2))
-    provider_calls=sum('files' in e for e in events())
-    for columns,rows in [(65,36),(130,36),(130,18),(65,18),(130,18),(130,6),(65,6),(130,36)]:
-        record('resize', rows=rows, columns=columns)
-        fcntl.ioctl(m,termios.TIOCSWINSZ,struct.pack('HHHH',rows,columns,0,0));os.kill(p.pid,signal.SIGWINCH);pump(.5);mark('resize '+str(columns)+'x'+str(rows))
-        assert sum('files' in e for e in events())==provider_calls,'resize re-queried provider'
-        native_picker_proof('resize '+str(columns)+'x'+str(rows),controls=True)
-    keys(b'\x1b');keys(b'\x1bs');keys('界'.encode(),1);mark('native Unicode clipping')
-    for columns in [130,65,130]:
-        record('resize',rows=36,columns=columns)
-        fcntl.ioctl(m,termios.TIOCSWINSZ,struct.pack('HHHH',36,columns,0,0));os.kill(p.pid,signal.SIGWINCH);pump(.5)
-        screen=native_picker_proof('Unicode clipping '+str(columns),controls=True)
-        proof=native_cells[-1];row=proof['row'];inner=proof['innerWidth']
-        text=''.join(screen.buffer[row][x].data for x in range(inner))
-        assert '界𐐀' in text,('Unicode identity clipped',proof)
-        # Native viewport clips the unchanged entry; no code-point truncation hint.
-        from wcwidth import wcswidth
-        observed=json.loads((base/'ui.json').read_text())
-        entry=node(observed['tree'],'results')['items'][0]
-        assert entry['text']=='>  界𐐀'+'Long'*24+' · 界𐐀Long.kt:1',('Unicode source identity changed',entry)
-        assert 'truncateToChars' not in entry and 'truncateToChars' not in node(observed['tree'],'selected-location')['entries'][0]
-        for x in range(inner):
-            c=screen.buffer[row][x]
-            if wcswidth(c.data)==2:
-                assert x+1<inner and screen.buffer[row][x+1].data=='',('Split wide glyph at viewport edge',proof,x)
-            if c.data=='':
-                assert x>0 and wcswidth(screen.buffer[row][x-1].data)==2,('Orphan wide continuation',proof,x)
-        assert screen.buffer[row][inner].data=='│',('Unicode entry crosses native separator',proof)
-        assert not any('LongLong' in ''.join(screen.buffer[y][x].data for x in range(inner)) for y in range(row+1,row+3)),('Unicode entry wrapped beyond one row',proof)
-        assert screen.buffer[row][4].bg==__import__('demo').theme_color(json.loads((base/'theme-meta.json').read_text())['data'],'search.match_bg') and screen.buffer[row][4].bold,('CJK match byte overlay absent',proof)
-        assert screen.buffer[row][5].bg==screen.buffer[row][4].bg and screen.buffer[row][5].bold,('CJK continuation match lost',proof)
-        proof['unicode_clip']=dict(identityPrefix=text[:7],unchangedEntry=True,oneRow=True,wideCellsIntact=True,separatorIntact=True,matchCells=[4,5])
-        (base/'picker-cell-evidence.json').write_text(json.dumps(native_cells,indent=2))
-    keys(b'\x1b');keys(b'\x1bs');keys(b'manyfoo',1);mark('many cards')
-    for _ in range(18):keys(b'\x1b[B',.03)
-    mark('many cards scrolled')
-    assert phases[-1]['ui']['state']['selected']!=phases[-2]['ui']['state']['selected']
-    keys(b'\x1b');keys(b'\x1bs');keys(b'Foo',1)
-    keys(b'\x1b[B');keys(b'\x1b[B');mark('native transient build preview')
-    snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
-    assert sum(b['is_preview'] for b in snap['buffers'])==1 and snap['syntax'],snap
-    assert snap['panes'][0]['bufferId']!=1 and snap['panes'][0]['viewport']['topLine']==0,snap
-    keys(b'\x1b');command('Smoke Snapshot')
-    restored=next(e for e in reversed(events()) if 'buffers' in e)
-    assert restored['active']==1 and restored['cursor']['position']==0 and restored['panes'][0]['x']==0,restored
-    assert not any(b['is_preview'] for b in restored['buffers'])
-    assert restored['panes']==free['panes'],(free,restored)
-    phases.append({'phase':'permitted first-open exact pane geometry restored', 'before':free,'after':restored,'ansiBytes':len(data)})
-    (base/'close-after-dispatch').write_text('armed')
-    keys(b'\x1bs');keys(b'Foo',1);keys(b'\x1b[B');keys(b'\x1b[B',1);command('Smoke Snapshot')
-    race=json.loads((base/'race.json').read_text())
-    assert any(b['is_preview'] and not b['splits'] for b in race['buffers']),race
-    cleaned=next(e for e in reversed(events()) if 'buffers' in e)
-    assert not any(b['is_preview'] for b in cleaned['buffers']),cleaned
-    assert not json.loads((base/'lifecycle.json').read_text())['open']
-    phases.append({'phase':'close after native dispatch before ownership; orphan removed','interleaving':race,'after':cleaned})
-    keys(b'\x1bs');keys(b'Foo',1);keys(b'\x1b[B');keys(b'\x1b[B');mark('reopen after raced close; browse works')
-    assert 'Existing preview preserved' not in str(phases[-1]['ui']['tree'])
-    assert sum(b['is_preview'] for b in next(e for e in reversed(events()) if 'buffers' in e)['buffers'])==1
-    keys(b'\x1b')
-    keys(b'\x1bs');keys(b'Foo',1);keys(b'\x1b[B');keys(b'\r');mark('native symbol position')
-    snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
-    assert next(b for b in snap['buffers'] if b['id']==snap['active'])['path']==str(root/'Foo.kt')
-    assert snap['cursor']['position']==6,snap
-    assert not json.loads((base/'lifecycle.json').read_text())['open']
-    keys(b'\x1bs');keys(b'slow',.1);keys(b'\x1b');keys(b'\x1bs');keys(b'Foo',1.3);mark('close reopen stale query')
-    assert phases[-1]['ui']['state']['query']=='Foo' and len(phases[-1]['ui']['state']['results'])==3
-    keys(b'\x1b');keys(b'\x1bs');keys(b'readerror',1);mark('disk read failure')
-    assert phases[-1]['ui']['state']['errors'] and not phases[-1]['ui']['state']['results']
-    keys(b'\r');assert json.loads((base/'ui.json').read_text())['state']['mode']=='everywhere'
-    keys(b'\x1b');keys(b'\x1bs');keys(b'long',1);mark('prefix ceiling incomplete')
-    assert any('64 KiB' in w for w in phases[-1]['ui']['state']['warnings'])
-    keys(b'\r');assert json.loads((base/'ui.json').read_text())['state']['mode']=='everywhere'
-    keys(b'\x1b');keys(b'\x1bs');keys(b'needle',.8);keys(b'\r',.5);mark('bounded capture gate')
-    assert any('bounded process output' in e for e in phases[-1]['ui']['state']['errors'])
-    assert not (base/'spawn.json').exists(), 'unsafe whole-output process spawned'
-    keys(b'\x1b');command('Smoke Override');command('Smoke Override');record('phase', name='demo-regex-start');keys(b'\x1bs');typed('n.*e',.8)
-    keys(b'\t');keys(b' ',.3);mark('toggle without Enter')
-    assert phases[-1]['widget']['event_type']=='toggle'
-    assert phases[-1]['ui']['state']['mode']=='grep' and not phases[-1]['ui']['state']['results']
-    assert not any('override' in e for e in events()), 'grep ran before Enter'
-    keys(b'\r',1);mark('full nonliteral callback override')
-    assert len(phases[-1]['ui']['state']['results'])==2 and not phases[-1]['ui']['state']['errors']
-    assert sum('override' in e for e in events())==1, 'same-name registration duplicated'
-    listing=node(phases[-1]['ui']['tree'], 'results');entries=listing['items']
-    assert 'itemSpecs' not in listing
-    assert entries[0]['text'].startswith('>  Bar.kt:1 · class Bar') and 'CUSTOM' not in str(entries)
-    keys(b'\x1b[Z');keys(b'\x1b[B');keys(b'\x1b[A');keys(b'\r');mark('grep native open')
-    snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
-    assert next(b for b in snap['buffers'] if b['id']==snap['active'])['path']==str(root/'Bar.kt'),snap
-    assert snap['cursor']['position']==16,snap
-    record('phase', name='demo-regex-end')
-    command('Smoke Dirty');keys(b'\x1bs');keys(b'Foo',1);mark('dirty file warning')
-    assert 'Unsaved edits' in str(phases[-1]['ui']['tree'])
-    keys(b'\x1b');command('Smoke Snapshot')
-    dirtysnap=next(e for e in reversed(events()) if 'buffers' in e)
-    assert any(b['modified'] for b in dirtysnap['buffers'])
-    command('Smoke Clean')
-    command('Smoke Foreign');command('Smoke Snapshot')
-    foreign=next(e for e in reversed(events()) if 'buffers' in e)
-    keys(b'\x1bs');keys(b'Foo',1);mark('foreign transient preserved')
-    assert any(b['is_preview'] for b in foreign['buffers']),foreign
-    keys(b'\x1b');command('Smoke Snapshot')
-    after=next(e for e in reversed(events()) if 'buffers' in e)
-    assert [(b['id'],b['is_preview']) for b in foreign['buffers']]==[(b['id'],b['is_preview']) for b in after['buffers']]
-    command('Smoke Dismiss');command('Smoke Split');command('Smoke Snapshot')
-    before=next(e for e in reversed(events()) if 'buffers' in e)
-    keys(b'\x1bs');keys(b'Foo',1);keys(b'\x1b');command('Smoke Snapshot')
-    after=next(e for e in reversed(events()) if 'buffers' in e)
-    assert after['panes']==before['panes'],(before,after)
-    command('Smoke Remove');command('Smoke Reload');keys(b'\x1b');keys(b'\x1bs')
-    keys(b'\x1b[200~FooX\x1b[201~');keys(b'\x7f',1);mark('init reload; paste backspace')
-    assert phases[-1]['ui']['state']['query']=='Foo'
-    snap=next(e for e in reversed(phases[-1]['events']) if 'buffers' in e)
-    assert snap['handlers'].count('search_everywhere_event')==1 and snap['handlers'].count('smoke_events')==1,snap
-    assert not any(b['name'].startswith('search-everywhere-preview') for b in snap['buffers'])
-    keys(b'\x1b',.8);assert not json.loads((base/'lifecycle.json').read_text())['open']
-    assert not json.loads((base/'lifecycle.json').read_text())['queued']
-    # Native requests to separate configured languages; no runtime eligibility inference.
-    command('Smoke Parallel')
-    def lsp_rows(name):
-        path=base/name
-        return [json.loads(row) for row in path.read_text().splitlines()] if path.exists() else []
-    def ui(): return json.loads((base/'ui.json').read_text())['state']
-    def wait_for(predicate):
-        end=time.monotonic()+3
-        while not predicate():
-            assert time.monotonic()<end, (ui(),lsp_rows('slow-lsp.jsonl'))
-            pump(.05)
-    def paste(q): keys(b'\x1b[200~'+q.encode()+b'\x1b[201~',.1)
-    def release(q): (base/('release-'+q)).write_text('go')
-    keys(b'\x1bs');paste('hold')
-    wait_for(lambda: any(r['name']=='Foo' for r in ui()['results']) and any('Independent fixture failure' in e for e in ui()['errors']))
-    wait_for(lambda: any(r.get('event')=='begin' and r.get('query')=='hold' for r in lsp_rows('slow-lsp.jsonl')))
-    assert ui()['pending']==1 and not any(r.get('event')=='end' and r.get('query')=='hold' for r in lsp_rows('slow-lsp.jsonl'))
-    selected=ui()['selected'];mark('parallel fast result and error while slow gate unfinished')
-    release('hold');wait_for(lambda: ui()['pending']==0)
-    assert {r['name'] for r in ui()['results']}=={'Foo','Bar'} and ui()['selected']==selected
-    mark('parallel slow completion preserves fast selection and partial error')
-    keys(b'\x1b');keys(b'\x1bs');paste('old')
-    wait_for(lambda: any(r.get('event')=='begin' and r.get('query')=='old' for r in lsp_rows('slow-lsp.jsonl')))
-    wait_for(lambda: any('python: timeout' in e for e in ui()['errors']))
-    assert any(r['name']=='Foo' for r in ui()['results'])
-    mark('individual slow timeout preserves fast result')
-    # Backspace changes use the actual native query widget, not injected events.
-    keys(b'\x7f'*3,.05);paste('middle');keys(b'\x7f'*6,.05);paste('latest')
-    wait_for(lambda: ui()['query']=='latest' and any(r['name']=='Foo' for r in ui()['results']))
-    assert not any(r.get('event')=='begin' and r.get('query') in ('middle','latest') for r in lsp_rows('slow-lsp.jsonl'))
-    mark('latest queued behind actually unfinished timed-out request')
-    release('old')
-    wait_for(lambda: any(r.get('event')=='begin' and r.get('query')=='latest' for r in lsp_rows('slow-lsp.jsonl')))
-    assert not any(r.get('event')=='begin' and r.get('query')=='middle' for r in lsp_rows('slow-lsp.jsonl'))
-    assert ui()['query']=='latest' and not any(r['name']=='Bar' for r in ui()['results'])
-    # Enter may open fast saved symbol despite the slow job still being pending.
-    keys(b'\r');assert not json.loads((base/'lifecycle.json').read_text())['open']
-    command('Smoke Snapshot');snap=next(e for e in reversed(events()) if 'buffers' in e)
-    assert snap['cursor']['position']==6
-    keys(b'\x1bs');paste('reopen');wait_for(lambda: ui()['query']=='reopen' and any(r['name']=='Foo' for r in ui()['results']))
-    release('latest')
-    wait_for(lambda: any(r.get('event')=='begin' and r.get('query')=='reopen' for r in lsp_rows('slow-lsp.jsonl')))
-    assert not any(r['name']=='Bar' for r in ui()['results'])
-    release('reopen');wait_for(lambda: ui()['pending']==0)
-    assert {r['name'] for r in ui()['results']}=={'Foo','Bar'}
-    mark('late closed-generation result ignored; latest reopen queued safely')
-    keys(b'\x1b');command('Smoke Symbols Override')
-    counts={name:len(lsp_rows(name)) for name in ['lsp.jsonl','slow-lsp.jsonl','error-lsp.jsonl']}
-    keys(b'\x1bs');paste('Foo');wait_for(lambda: ui()['pending']==0 and any(e.get('symbolOverride')=='Foo' for e in events()))
-    assert counts=={name:len(lsp_rows(name)) for name in counts}, 'custom symbols did not replace entire builtin'
-    mark('full custom symbols override bypasses all builtin languages')
-    keys(b'\x1b');command('Smoke Remove')
-    command('Smoke Cancel Fixture')
-    for q,action in [('cancel-timeout','timeout'),('cancel-escape','escape')]:
-        keys(b'\x1bs');paste(q);wait_for(lambda:any(e.get('cancelBusy')==q for e in events()))
-        if action=='timeout':wait_for(lambda:ui()['pending']==0)
-        else:keys(b'\x1b',.1)
-        wait_for(lambda:any(e.get('cancelSecond')==q for e in events()))
-        assert sum(e.get('cancelFirst')==q for e in events())==1 and sum(e.get('cancelSecond')==q for e in events())==1
-        assert not any(e.get('cancelSettled')==q for e in events()), 'Cancellation fixture must remain physically busy'
-        if action=='timeout':keys(b'\x1b',.1)
-        command('Smoke Snapshot');closed=snapshot()
-        assert not json.loads((base/'lifecycle.json').read_text())['open'] and not any(b['is_preview'] for b in closed['buffers'])
-        (base/('cancel-release-'+q)).write_text('go');wait_for(lambda:any(e.get('cancelSettled')==q for e in events()));pump(.15)
-        phases.append(dict(phase='throwing cancellation '+action+' cleans native session while provider busy',callbackCounts=[1,1]))
-    command('Smoke Remove');command('Smoke Parallel')
-    for name in ['lsp.jsonl','slow-lsp.jsonl','error-lsp.jsonl']:
-        active=set()
-        for row in lsp_rows(name):
-            if row.get('event')=='begin':
-                active.add(row['id']);assert len(active)==1,(name,row,active)
-            elif row.get('event')=='end': active.remove(row['id'])
-        assert not active,(name,active)
-    keys(b'\x1bs');paste('Foo');wait_for(lambda: ui()['pending']==0)
-    command('Smoke Foreign Overlay')
-    command('Smoke Context window');pump(.3);command('Smoke Cleanup State')
-    deferred=json.loads((base/'cleanup.json').read_text())
-    assert deferred['session'] is False and deferred['pending']==1 and deferred['timer'] is not None,deferred
-    command('Smoke Snapshot');phases.append({'phase':'deferred local context native BG retained','ansiBytes':len(data)})
-    command('Smoke Context authority');pump(.3);command('Smoke Cleanup State')
-    assert json.loads((base/'cleanup.json').read_text())['pending']==1
-    command('Smoke Context same');pump(.3);command('Smoke Cleanup State')
-    cleared=json.loads((base/'cleanup.json').read_text())
-    assert cleared['pending']==0 and cleared['timer'] is None,cleared
-    command('Smoke Snapshot');phases.append({'phase':'deferred return native own BG cleared foreign FG BG retained','ansiBytes':len(data)})
-    # Old dock lifecycle is outside this fix; release it only in fixture setup.
-    command('Smoke Free Dock')
-    keys(b'\x11',1)
-    assert any(e.get('lsp') for e in events()), 'fake LSP route did not resolve'
-    assert b'class Foo' in data or b'findUser' in data
-    assert p.wait(timeout=3)==0, 'Fresh did not exit cleanly'
-    chrome=base/'data'/'fresh'/'chrome.json'
-    if chrome.exists():assert json.loads(chrome.read_text()).get('dock',{}).get('width',36)==36,chrome.read_text()
-    # Success is printed only after finally has verified child cleanup.
+    end = time.monotonic() + 15
+    capture = bytearray()
+    while time.monotonic() < end and not (base / 'config-proof.json').exists():
+        if select.select([master], [], [], .05)[0]:
+            data = os.read(master, 65536)
+            capture.extend(data)
+            if b'\x1b[6n' in data: os.write(master, b'\x1b[1;1R')
+        if p.poll() is not None: break
+    (base / 'terminal.bin').write_bytes(capture)
+    proof = json.loads((base / 'config-proof.json').read_text())
+    assert proof['probe']['backend'] == 'rg' and proof['probe']['arcBackend'] == 'remote', proof
+    assert proof['native']['settings'] == {'backend': 'rg', 'arcBackend': 'remote'}, proof
+    assert not proof['native']['activated'], proof
+    print('PASS native config_linux overrides config.json:', base)
 finally:
-    # A second TERM must not interrupt cleanup after the runner timeout.
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    stop_process(p)
-    for pid in live_children():
-        try:os.kill(pid,signal.SIGTERM)
-        except ProcessLookupError:pass
-    deadline=time.monotonic()+1
-    while live_children() and time.monotonic()<deadline:time.sleep(.05)
-    for pid in live_children():
-        try:os.kill(pid,signal.SIGKILL)
-        except ProcessLookupError:pass
-    deadline=time.monotonic()+1
-    while live_children() and time.monotonic()<deadline:time.sleep(.05)
-    (base/'process-cleanup.json').write_text(json.dumps({'known':list(known_children),'live':live_children()}))
-    assert not live_children(),'owned test children survived cleanup'
-    os.close(m);(base/'terminal.ansi').write_bytes(data)
-    (base/'phases.json').write_text(json.dumps(phases,indent=2))
-    (base/'recording.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in recording))
-    print('Evidence:',base)
-print('PASS native dock/viewer smoke (default-rg gate explicit):',base,'exit:',p.returncode)
+    os.killpg(p.pid, signal.SIGTERM) if p.poll() is None else None
+    try: p.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL); p.wait()
+    os.close(master); os.close(slave)
