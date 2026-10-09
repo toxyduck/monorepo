@@ -121,13 +121,88 @@ class DemoTests(unittest.TestCase):
             self.assertEqual((assets/'unrelated.txt').read_text(),'preserve')
             self.assertIn(b'[![',readme.read_bytes())
 
+    def test_provenance_is_in_protected_publication(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); base=root/'evidence'; base.mkdir(); package=root/'package'; package.mkdir()
+            readme=package/'README.md'; original=(demo.START+'\nold\n'+demo.END).encode(); readme.write_bytes(original)
+            assets=package/'assets'; assets.mkdir()
+            for name in ('demo.gif','demo.mp4'):
+                (base/name).write_bytes(('new '+name).encode())
+                (assets/name).write_bytes(('old '+name).encode())
+            manifest={suffix+'_sha256':demo.sha(base/('demo.'+suffix)) for suffix in ('gif','mp4')}
+            (base/'demo-manifest.json').write_text(json.dumps(manifest))
+            provenance=assets/'provenance.json'; sentinel=root/'sentinel'; sentinel.write_bytes(b'untouched')
+            old={p:p.read_bytes() for p in (readme,assets/'demo.gif',assets/'demo.mp4')}
+            provenance.symlink_to(sentinel)
+            with self.assertRaisesRegex(ValueError,'symlink'): demo.publish(base,readme,original)
+            self.assertEqual(sentinel.read_bytes(),b'untouched')
+            self.assertEqual({p:p.read_bytes() for p in old},old)
+            provenance.unlink(); provenance.mkdir()
+            with self.assertRaisesRegex(ValueError,'regular file'): demo.publish(base,readme,original)
+            self.assertEqual({p:p.read_bytes() for p in old},old)
+            provenance.rmdir(); provenance.write_bytes(b'old provenance'); old[provenance]=b'old provenance'
+            real=demo.os.replace
+            def fail_provenance(source,path):
+                if path==provenance and Path(source).read_bytes()!=b'old provenance': raise OSError('provenance write failed')
+                return real(source,path)
+            with patch.object(demo.os,'replace',side_effect=fail_provenance):
+                with self.assertRaisesRegex(OSError,'provenance write failed'): demo.publish(base,readme,original)
+            self.assertEqual({p:p.read_bytes() for p in old},old)
+            with patch.object(demo.native,'replace_readme',side_effect=ValueError('concurrent README')):
+                with self.assertRaises(ValueError): demo.publish(base,readme,original)
+            self.assertEqual({p:p.read_bytes() for p in old},old)
+            stage=demo.native.stage_asset
+            def concurrent(path,data):
+                result=stage(path,data)
+                if path==provenance: provenance.write_bytes(b'independent writer')
+                return result
+            with patch.object(demo.native,'stage_asset',side_effect=concurrent):
+                with self.assertRaisesRegex(ValueError,'changed concurrently'): demo.publish(base,readme,original)
+            self.assertEqual(provenance.read_bytes(),b'independent writer')
+            self.assertEqual({p:p.read_bytes() for p in old if p!=provenance},{p:v for p,v in old.items() if p!=provenance})
+            demo.publish(base,readme,original)
+            self.assertEqual(provenance.read_bytes(),(base/'demo-manifest.json').read_bytes())
+
     def test_frame_cap_before_encoding(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp)
             events=[dict(type='phase',name=name,time=t) for name,t in
-                    [('demo-foo-start',0),('demo-foo-end',29),('demo-regex-start',30),('demo-regex-end',59)]]
+                    [('demo-foo-start',0),('demo-foo-end',39),('demo-regex-start',40),('demo-regex-end',79)]]
             with patch.object(demo,'recording',return_value=(b'',events)), patch.object(demo,'Renderer'):
                 with self.assertRaisesRegex(ValueError,'cap exceeded'): demo.make(base,base,[])
+
+    def test_semantic_holds_use_separate_presentation_clock(self):
+        events=[dict(type='chunk',time=0,start=0,offset=1),
+                dict(type='phase',time=.2,offset=1,name='important'),
+                dict(type='chunk',time=.2,start=1,offset=2),
+                dict(type='phase',time=1,offset=2,name='done')]
+        original=json.dumps(events)
+        samples,timing=demo.native.presentation_timeline(events,[dict(start=0,end=1)],('important','done'))
+        holds=[s for s in samples if s['held']]
+        self.assertEqual(len(holds),24)
+        self.assertEqual(holds[0],dict(recording_time=.2,event_count=2,held=True))
+        self.assertEqual(holds[-1],dict(recording_time=1,event_count=4,held=True))
+        self.assertEqual(timing['holds'][0]['seconds'],1.5)
+        self.assertEqual(timing['presentation_duration'],len(samples)/demo.FPS)
+        self.assertEqual(timing['recording_duration'],1)
+        self.assertEqual(json.dumps(events),original)
+        counts=[s['event_count'] for s in samples]
+        self.assertEqual(counts,sorted(counts))
+        plain,_=demo.native.presentation_timeline(events,[dict(start=0,end=1)],('important',),0)
+        self.assertFalse(any(s['held'] for s in plain))
+        for seconds in (-1,6,float('nan'),float('inf')):
+            with self.assertRaises(ValueError):
+                demo.native.presentation_timeline(events,[dict(start=0,end=1)],(),seconds)
+        with patch.object(demo.native,'MAX_FRAMES',20):
+            with self.assertRaisesRegex(ValueError,'cap exceeded'):
+                demo.native.presentation_timeline(events,[dict(start=0,end=1)],('important','done'))
+
+    def test_shared_encode_cap_before_renderer(self):
+        events=[dict(type='phase',time=61,offset=0,name='done')]
+        with patch.object(demo.native,'recording',return_value=(b'',events)), patch.object(demo.native,'Renderer') as renderer:
+            with self.assertRaisesRegex(ValueError,'cap exceeded'):
+                demo.native.encode_recording(Path('/tmp/unused'),'',{}, {},hold_phases=('done',))
+            renderer.assert_not_called()
 
     def test_encode_failure(self):
         import subprocess

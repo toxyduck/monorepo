@@ -9,7 +9,8 @@ import subprocess
 import tempfile
 
 FPS = 8
-MAX_FRAMES = 240
+MAX_FRAMES = 480  # 60 seconds, including presentation holds; byte caps stay unchanged.
+HOLD_SECONDS = 1.5
 MAX_ANSI = 16 * 1024 * 1024
 MAX_MP4 = 32 * 1024 * 1024
 MAX_GIF = 5 * 1024 * 1024
@@ -144,7 +145,7 @@ def verify_gif(path, duration):
         elapsed = 0
         for i in range(image.n_frames):
             image.seek(i); image.load(); elapsed += image.info.get('duration',0)
-        if elapsed <= 0 or elapsed > 30000 or abs(elapsed/1000-duration) > .15:
+        if elapsed <= 0 or elapsed > MAX_FRAMES/FPS*1000 or abs(elapsed/1000-duration) > .15:
             raise ValueError('GIF duration mismatch')
         return dict(frames=image.n_frames, dimensions=[width,height], duration=elapsed/1000,
                     bytes=path.stat().st_size, sha256=sha(path), full_decode='PASS')
@@ -209,7 +210,7 @@ def atomic_asset(path, data):
         if temp.exists(): temp.unlink()
 
 
-def publish(base, readme, original, source_root=None, source_files=None, asset_dir=None, readme_block=None):
+def publish(base, readme, original, source_root=None, source_files=None, asset_dir=None, readme_block=None, provenance=False):
     if readme_snapshot(readme) != original: raise ValueError('README changed concurrently')
     manifest = json.loads((base/'demo-manifest.json').read_text())
     if source_root is not None:
@@ -226,6 +227,10 @@ def publish(base, readme, original, source_root=None, source_files=None, asset_d
     for path, content, cap in zip(targets,data,[MAX_GIF,MAX_MP4]):
         if not 0 < len(content) <= cap or hashlib.sha256(content).hexdigest() != manifest[path.suffix[1:]+'_sha256']:
             raise ValueError('Verified asset hash/size mismatch')
+    if provenance:
+        targets.append(assets/'provenance.json')
+        old.append(asset_snapshot(targets[-1]))
+        data.append((base/'demo-manifest.json').read_bytes())
     assets.mkdir(exist_ok=True)
     changed = []; staged = []
     try:
@@ -292,16 +297,56 @@ def write_source_copy(source,dest,transform=lambda text:text):
     return dict(source_sha256=sha(source),copy_sha256=sha(dest))
 
 
-def encode_recording(base, caption, source_hashes, assertions):
-    # Generic bounded replay; scenario assertions belong to the caller.
+def presentation_timeline(events, clips, hold_phases=(), hold_seconds=HOLD_SECONDS):
+    """Sample the PTY clock; freeze exact phase states only on the media clock.
+
+    event_count prevents later events at the same timestamp leaking into a hold.
+    No recording timestamps, assertions or process deadlines are changed.
+    """
+    import bisect
     import math
-    raw,events=recording(base);renderer=Renderer();screen=renderer.pyte.Screen(130,36);stream=renderer.pyte.ByteStream(screen)
-    frames=math.ceil(events[-1]['time']*FPS)
+    if not math.isfinite(hold_seconds) or not 0 <= hold_seconds <= 5:
+        raise ValueError('Hold duration must be between 0 and 5 seconds')
+    clocks = [e['time'] for e in events]
+    samples = []; holds = []
+    hold_frames = math.ceil(hold_seconds*FPS)
+    for clip in clips:
+        start, end = clip['start'], clip['end']
+        if end <= start: raise ValueError('Empty demo clip')
+        points = [(start+i/FPS, bisect.bisect_right(clocks,start+i/FPS), None)
+                  for i in range(math.ceil((end-start)*FPS))]
+        # Include the final checkpoint, even when it falls between sampled frames.
+        points.append((end, bisect.bisect_right(clocks,end), None))
+        for index,e in enumerate(events):
+            if e['type']=='phase' and e['name'] in hold_phases and start<=e['time']<=end:
+                points.append((e['time'],index+1,e['name']))
+        for timestamp, count, phase in sorted(points, key=lambda p:(p[0],p[1],p[2] is None)):
+            if phase is not None:
+                if hold_frames:
+                    holds.append(dict(phase=phase,recording_time=timestamp,event_count=count,
+                                      presentation_start=len(samples)/FPS,frames=hold_frames,seconds=hold_frames/FPS))
+                    samples.extend([dict(recording_time=timestamp,event_count=count,held=True)]*hold_frames)
+            else:
+                samples.append(dict(recording_time=timestamp,event_count=count,held=False))
+        if len(samples)>MAX_FRAMES: raise ValueError('Frame/duration cap exceeded')
+    timing = dict(recording_duration=events[-1]['time'],source_clips=clips,
+                  sampled_frames=sum(not s['held'] for s in samples),
+                  presentation_duration=len(samples)/FPS,hold_seconds=hold_seconds,holds=holds,
+                  policy='Exact semantic phase freezes; PTY timestamps unchanged. Holds are presentation only.')
+    return samples, timing
+
+
+def encode_recording(base, caption, source_hashes, assertions, hold_phases=(), hold_seconds=HOLD_SECONDS):
+    # Generic bounded replay; scenario assertions belong to the caller.
+    raw,events=recording(base)
+    samples,timing=presentation_timeline(events,[dict(start=0,end=events[-1]['time'])],hold_phases,hold_seconds)
+    frames=len(samples)
     if not 1<frames<=MAX_FRAMES:raise ValueError('Frame cap exceeded')
+    renderer=Renderer();screen=renderer.pyte.Screen(130,36);stream=renderer.pyte.ByteStream(screen)
     index=0
     with tempfile.TemporaryDirectory(prefix='native-frames-',dir=base) as temp:
-        for number in range(frames):
-            while index<len(events) and events[index]['time']<=number/FPS:
+        for number,sample in enumerate(samples):
+            while index<sample['event_count']:
                 event=events[index]
                 if event['type']=='chunk':stream.feed(raw[event['start']:event['offset']])
                 elif event['type']=='resize':screen.resize(lines=event['rows'],columns=event['columns'])
@@ -313,8 +358,11 @@ def encode_recording(base, caption, source_hashes, assertions):
     decoded=invoke([renderer.ffmpeg,'-hide_banner','-i',str(base/'demo.mp4'),'-progress','pipe:1','-f','null','-'])
     counts=re.findall(rb'^frame=(\d+)$',decoded.stdout,re.M)
     if not counts or int(counts[-1])!=frames:raise ValueError('Decode frame mismatch')
+    decoded_times=re.findall(rb'^out_time_us=(\d+)$',decoded.stdout,re.M)
+    if not decoded_times or abs(int(decoded_times[-1])/1_000_000-frames/FPS)>1/FPS:
+        raise ValueError('Decoded duration mismatch')
     (base/'decode.log').write_bytes(decoded.stderr+decoded.stdout)
-    manifest=dict(caption=caption,assertions=assertions,source_hashes=source_hashes,recording_sha256=sha(base/'recording.jsonl'),ansi_sha256=sha(base/'terminal.ansi'),gif=gif,gif_sha256=gif['sha256'],mp4_sha256=sha(base/'demo.mp4'),frames=frames,fps=FPS,duration=frames/FPS,full_decode='PASS',fonts=[dict(file=Path(f['path']).name,sha256=f['sha256']) for f in renderer.font_info],tools={name:importlib.metadata.version(name) for name in ('pyte','Pillow','wcwidth','imageio-ffmpeg')},ffmpeg_version=invoke([renderer.ffmpeg,'-version']).stdout.decode().splitlines()[0])
+    manifest=dict(timing=timing,caption=caption,assertions=assertions,source_hashes=source_hashes,recording_sha256=sha(base/'recording.jsonl'),ansi_sha256=sha(base/'terminal.ansi'),gif=gif,gif_sha256=gif['sha256'],mp4_sha256=sha(base/'demo.mp4'),frames=frames,fps=FPS,duration=frames/FPS,full_decode='PASS',fonts=[dict(file=Path(f['path']).name,sha256=f['sha256']) for f in renderer.font_info],tools={name:importlib.metadata.version(name) for name in ('pyte','Pillow','wcwidth','imageio-ffmpeg')},ffmpeg_version=invoke([renderer.ffmpeg,'-version']).stdout.decode().splitlines()[0])
     (base/'demo-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     return manifest
 

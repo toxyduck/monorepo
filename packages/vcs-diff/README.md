@@ -2,6 +2,12 @@
 
 Read-only **VCS Diff** picker (unstaged, staged, commit input, history) and **VCS Inline Blame**. The viewer shows every changed file in one vertical stream, with its own file tree, icons, status and line counts. Tab switches unified / side-by-side without losing the source-line anchor; Escape closes owned panes. The native Explorer is not modified. No reset, stage, apply or rollback operations.
 
+## Terminal viewer
+
+Both layouts use one read-only virtual buffer and one vertical scroll, with local old/new line numbers, a custom gutter, file-header blocks and informational metadata. Unified keeps full lines and uses Fresh's native syntax regions, with separate per-file/version streams. Side-by-side aligns replacement cells, leaves missing counterparts empty, and clips long cells with `…`; original snapshots remain complete. Tabs expand at four-column stops; widths use terminal cells, including Unicode. Resize only rebuilds presentation, never reruns adapters. Comparison and controls remain in the fixed tree and native status bar.
+
+**Fresh 0.5.2 limitation:** native syntax regions cannot reliably isolate two code cells on the same physical row. Side-by-side therefore uses plain code foreground, not IDE-style syntax highlighting; addition/removal cell backgrounds, gutters and separators still use semantic theme roles. Unified uses full-row addition/removal backgrounds, including blank areas. Snapshot/header loading remains bounded at 8 MiB; rendered presentation has a separate 16 MiB limit checked before native buffer updates.
+
 ## Trusted configuration
 
 Install the built `vcs_diff.ts` into `<Fresh config dir>/plugins/vcs_diff.ts`. Set Fresh JSON (the underscore namespace is intentional):
@@ -56,6 +62,8 @@ Fresh 0.5.2's foreground `kill()` may return `false`. Escape stops UI immediatel
 
 [![Escape, bounded busy lock, reopen and errors](assets/cancel/demo.gif)](assets/cancel/demo.mp4)
 <!-- demo-video:end -->
+
+Important picker, diff, layout, marker, blame and state screens freeze for 1.5 seconds during replay. These presentation holds do not change raw PTY time or measured process deadlines. Replay is bounded to 60 seconds per clip; `timing` records both clocks and each hold.
 
 See `assets/provenance.json` for actual scenario coverage, recording/source hashes and full media decode results. Synthetic slow/error adapters are labelled separately from temporary real Git scenes. No external publication is needed.
 

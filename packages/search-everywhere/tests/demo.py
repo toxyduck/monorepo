@@ -9,7 +9,6 @@ import subprocess
 import tempfile
 
 FPS = 8
-MAX_FRAMES = 240
 MAX_ANSI = 16 * 1024 * 1024
 MAX_MP4 = 32 * 1024 * 1024
 MAX_GIF = 5 * 1024 * 1024
@@ -21,9 +20,13 @@ END = '<!-- demo-video:end -->'
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / '_shared'))
 import native_demo as native
+MAX_FRAMES = native.MAX_FRAMES
 from native_demo import (Blocked, dependencies, sha, recording, COLORS, rgb, pua, Renderer,
                          invoke, verify_gif, make_gif, readme_snapshot, replace_readme,
-                         asset_snapshot, stage_asset, atomic_asset, publish)
+                         asset_snapshot, stage_asset, atomic_asset)
+
+def publish(base, readme, original, source_root=None, source_files=None):
+    return native.publish(base, readme, original, source_root, source_files, provenance=True)
 
 def theme_color(data, key):
     if isinstance(data, str): data = json.loads(data)
@@ -180,7 +183,7 @@ def encoded_stability(base, ffmpeg, samples):
     return result
 
 
-def make(base, source, source_files):
+def make(base, source, source_files, hold_seconds=native.HOLD_SECONDS):
     raw, events = recording(base)
     renderer = Renderer()
     phases = {e['name']: e for e in events if e['type'] == 'phase'}
@@ -189,8 +192,10 @@ def make(base, source, source_files):
         a, b = phases[start]['time'], phases[end]['time']
         if b <= a: raise ValueError('Empty demo clip')
         clips.append(dict(start=a, end=b, phases=[start,end]))
-    times = [clip['start'] + i/FPS for clip in clips for i in range(int((clip['end']-clip['start'])*FPS)+1)]
-    if not times or len(times) > MAX_FRAMES: raise ValueError('Frame/duration cap exceeded')
+    timeline,timing = native.presentation_timeline(events,clips,
+        ('native bind; live files and fake LSP','demo-foo-arrow','demo-foo-end',
+         'toggle without Enter','full nonliteral callback override','grep native open'),hold_seconds)
+    times = [s['recording_time'] for s in timeline]
     native_sources = json.loads((base/'native-source-manifest.json').read_text())
     production = {name: sha(source/name) for name in source_files if name.endswith('.ts') and '/tests/' not in name}
     if len(production) != 9 or production != {name: row['source_sha256'] for name,row in native_sources.items()}:
@@ -203,8 +208,9 @@ def make(base, source, source_files):
     theme=json.loads((base/'theme-meta.json').read_text())['data']
     # Replay every skipped byte and resize before the next selected frame.
     with tempfile.TemporaryDirectory(prefix='demo-frames-', dir=base) as temp:
-        for number, timestamp in enumerate(times):
-            while index < len(events) and events[index]['time'] <= timestamp:
+        for number, sample in enumerate(timeline):
+            timestamp=sample['recording_time']
+            while index < sample['event_count']:
                 event = events[index]
                 if event['type'] == 'chunk': stream.feed(raw[event['start']:event['offset']])
                 elif event['type'] == 'resize': screen.resize(lines=event['rows'], columns=event['columns'])
@@ -235,7 +241,9 @@ def make(base, source, source_files):
                     spinner.append(spinner_proof(screen, renderer, base, event['name']))
                 index += 1
             pulse=pulse_cells(screen)
-            if pulse:
+            # Motion/stability evidence excludes presentation freezes. The frame
+            # index addresses rendered media; recording_time remains the PTY clock.
+            if pulse and not sample['held']:
                 y,x=pulse['position']
                 stable_cells=[(yy,xx,c.data,c.fg,c.bg,c.bold,c.reverse,c.underscore) for yy in range(screen.lines) for xx in range(screen.columns)
                               if not (yy==y and x<=xx<x+3) for c in [screen.buffer[yy][xx]]]
@@ -263,12 +271,12 @@ def make(base, source, source_files):
     if not decoded_times or abs(int(decoded_times[-1])/1_000_000 - len(times)/FPS) > 1/FPS:
         raise ValueError('Decoded duration mismatch')
     motion=encoded_motion(base,renderer.ffmpeg,samples)
-    manifest = dict(encoded_motion=motion, encoded_stability=stability, theme_evidence=theme_proofs, theme=theme, gif=gif, gif_sha256=gif['sha256'], mp4_bytes=target.stat().st_size,
+    manifest = dict(timing=timing, encoded_motion=motion, encoded_stability=stability, theme_evidence=theme_proofs, theme=theme, gif=gif, gif_sha256=gif['sha256'], mp4_bytes=target.stat().st_size,
                     phase_pngs={name: sha(base/name) for name in ('demo-foo-proof.png','demo-regex-proof.png')},
                     decoded_duration=int(decoded_times[-1])/1_000_000, ansi_sha256=sha(base/'terminal.ansi'), recording_sha256=sha(base/'recording.jsonl'),
                     mp4_sha256=sha(target), png_sha256=sha(base/'demo-proof.png'), frames=len(times), fps=FPS,
                     duration=len(times)/FPS, dimensions=[1430,864], codec='h264', pixel_format='yuv420p',
-                    clips=clips, caps=dict(frames=MAX_FRAMES, seconds=30, ansi_bytes=MAX_ANSI, mp4_bytes=MAX_MP4, gif_bytes=MAX_GIF),
+                    clips=clips, caps=dict(frames=MAX_FRAMES, seconds=MAX_FRAMES/FPS, ansi_bytes=MAX_ANSI, mp4_bytes=MAX_MP4, gif_bytes=MAX_GIF),
                     fonts=renderer.font_info, glyphs=renderer.proof, highlight_cells=proofs, spinner_cells=spinner,
                     source_hashes={name: sha(source/name) for name in source_files}, native_sources=native_sources, production_files=9,
                     tools={name: importlib.metadata.version(name) for name in ('pyte','Pillow','wcwidth','imageio-ffmpeg')},

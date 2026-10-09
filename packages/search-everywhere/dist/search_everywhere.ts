@@ -293,6 +293,13 @@
     selectedFg: "ui.popup_selection_fg",
     previewRowBg: "editor.current_line_bg",
     matchBg: "search.match_bg",
+    code: "editor.fg",
+    fileHeaderBg: "editor.current_line_bg",
+    toolbarBg: "ui.status_bar_bg",
+    addBg: "editor.diff_add_bg",
+    removeBg: "editor.diff_remove_bg",
+    fillerBg: "editor.current_line_bg",
+    divider: "ui.split_separator_fg",
     loadingAccent: "ui.help_key_fg"
   };
   var LOADING_STEP_MS = 180;

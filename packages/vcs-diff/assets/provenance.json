@@ -1,5 +1,140 @@
 {
   "main": {
+    "timing": {
+      "recording_duration": 29.813503580982797,
+      "source_clips": [
+        {
+          "start": 0,
+          "end": 29.813503580982797
+        }
+      ],
+      "sampled_frames": 240,
+      "presentation_duration": 52.5,
+      "hold_seconds": 1.5,
+      "holds": [
+        {
+          "phase": "adapter-picker",
+          "recording_time": 0.0,
+          "event_count": 3,
+          "presentation_start": 0.0,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "picker",
+          "recording_time": 0.4218961480073631,
+          "event_count": 22,
+          "presentation_start": 2.0,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "unstaged",
+          "recording_time": 2.777384507993702,
+          "event_count": 139,
+          "presentation_start": 5.875,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "side-by-side",
+          "recording_time": 5.696537095995154,
+          "event_count": 261,
+          "presentation_start": 10.25,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "static-markers",
+          "recording_time": 7.827570030000061,
+          "event_count": 365,
+          "presentation_start": 13.875,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "normal-folding",
+          "recording_time": 8.263924957980635,
+          "event_count": 382,
+          "presentation_start": 15.875,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "staged",
+          "recording_time": 13.117222939006751,
+          "event_count": 613,
+          "presentation_start": 22.125,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "light-theme",
+          "recording_time": 14.348460643988801,
+          "event_count": 687,
+          "presentation_start": 24.875,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "resize",
+          "recording_time": 16.005297703988617,
+          "event_count": 729,
+          "presentation_start": 28.125,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "commit-input",
+          "recording_time": 18.197942947997944,
+          "event_count": 826,
+          "presentation_start": 31.75,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "commit-root",
+          "recording_time": 20.047568448004313,
+          "event_count": 926,
+          "presentation_start": 35.125,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "history",
+          "recording_time": 22.12126208099653,
+          "event_count": 1005,
+          "presentation_start": 38.625,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "history-diff",
+          "recording_time": 24.097687247995054,
+          "event_count": 1097,
+          "presentation_start": 42.125,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "blame",
+          "recording_time": 28.855162316991482,
+          "event_count": 1264,
+          "presentation_start": 48.375,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "dirty-blame-cleared",
+          "recording_time": 29.813503580982797,
+          "event_count": 1297,
+          "presentation_start": 50.875,
+          "frames": 12,
+          "seconds": 1.5
+        }
+      ],
+      "policy": "Exact semantic phase freezes; PTY timestamps unchanged. Holds are presentation only."
+    },
     "caption": "Actual Fresh PTY; temporary real Git fixture. Delayed/error/empty adapters are synthetic JS-expression fixtures, NOT live Arc.",
     "assertions": {
       "adapter-picker": {
@@ -14,113 +149,138 @@
       },
       "unstaged": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": null
+        }
       },
       "added-unified": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": 1
+        }
       },
       "added-side": {
         "timer": null,
-        "phase": 8,
+        "phase": 7,
         "cursor": {
-          "focusedPane": 0,
-          "paneCount": 2,
-          "lines": [
-            null,
-            3
-          ]
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": 1
         }
       },
       "added-roundtrip": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": 1
+        }
       },
       "deleted-unified": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 0,
+          "line": 3
+        }
       },
       "deleted-side": {
         "timer": null,
-        "phase": 8,
+        "phase": 7,
         "cursor": {
-          "focusedPane": 0,
-          "paneCount": 2,
-          "lines": [
-            5,
-            null
-          ]
+          "file": "0:mixed.txt",
+          "side": 0,
+          "line": 3
         }
       },
       "deleted-roundtrip": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 0,
+          "line": 3
+        }
       },
       "side-by-side": {
         "timer": null,
-        "phase": 8,
+        "phase": 7,
         "cursor": {
-          "focusedPane": 0,
-          "paneCount": 2,
-          "lines": [
-            5,
-            null
-          ]
+          "file": "0:mixed.txt",
+          "side": 0,
+          "line": 3
         }
       },
       "tree-click": {
         "timer": null,
-        "phase": 8,
+        "phase": 7,
         "cursor": {
-          "focusedPane": 0,
-          "paneCount": 2,
-          "lines": [
-            12,
-            11
-          ]
+          "file": "1:src/alpha.ts",
+          "side": 1,
+          "line": null
         }
       },
       "anchor-preserved": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "1:src/alpha.ts",
+          "side": 1,
+          "line": null
+        }
       },
       "anchor-roundtrip": {
         "timer": null,
-        "phase": 8,
+        "phase": 7,
         "cursor": {
-          "focusedPane": 0,
-          "paneCount": 2,
-          "lines": [
-            12,
-            11
-          ]
+          "file": "1:src/alpha.ts",
+          "side": 1,
+          "line": null
         }
       },
       "mixed-markers": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": null
+        }
       },
       "static-markers": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": null
+        }
       },
       "normal-folding": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": null
+        }
       },
       "normal-unfolding": {
         "timer": null,
-        "phase": 8,
-        "cursor": null
+        "phase": 7,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": null
+        }
       },
       "foreign-window": {
         "timer": null,
@@ -134,18 +294,39 @@
       },
       "staged": {
         "timer": null,
-        "phase": 7,
-        "cursor": null
+        "phase": 6,
+        "cursor": {
+          "file": "0:added.py",
+          "side": 1,
+          "line": null
+        }
       },
       "light-theme": {
         "timer": null,
-        "phase": 7,
-        "cursor": null
+        "phase": 6,
+        "cursor": {
+          "file": "0:added.py",
+          "side": 1,
+          "line": null
+        }
+      },
+      "light-side": {
+        "timer": null,
+        "phase": 6,
+        "cursor": {
+          "file": "0:added.py",
+          "side": 1,
+          "line": null
+        }
       },
       "resize": {
         "timer": null,
-        "phase": 7,
-        "cursor": null
+        "phase": 6,
+        "cursor": {
+          "file": "0:added.py",
+          "side": 1,
+          "line": null
+        }
       },
       "commit-input": {
         "timer": null,
@@ -154,8 +335,12 @@
       },
       "commit-root": {
         "timer": null,
-        "phase": 6,
-        "cursor": null
+        "phase": 5,
+        "cursor": {
+          "file": "0:deleted.txt",
+          "side": 1,
+          "line": null
+        }
       },
       "history": {
         "timer": null,
@@ -165,21 +350,25 @@
       "history-diff": {
         "timer": null,
         "phase": 7,
-        "cursor": null
+        "cursor": {
+          "file": "0:deleted.txt",
+          "side": 1,
+          "line": null
+        }
       },
       "blame-loading": {
-        "timer": 470,
+        "timer": 443,
         "phase": 1,
         "cursor": null
       },
       "blame-loading-next": {
-        "timer": 470,
+        "timer": 443,
         "phase": 5,
         "cursor": null
       },
       "blame-stop": {
         "timer": null,
-        "phase": 5,
+        "phase": 6,
         "cursor": null
       },
       "blame": {
@@ -194,40 +383,40 @@
       }
     },
     "source_hashes": {
-      "packages/vcs-diff/vcs_diff.ts": "12f25479df32a7895a07512ecf8fab089003021c3b6932ad61f6d214d7a927ce",
+      "packages/vcs-diff/vcs_diff.ts": "15b0abb35194cc1080231235ea1ca6146c465fff74b7e57b377cd93aed6a8c8f",
       "packages/vcs-diff/lib/config.ts": "8bc9ad9c4008aaa03dd1e00f1bf270c36b9931d704eaf9cb9a24da44eacf3b56",
       "packages/vcs-diff/lib/model.ts": "22b88905936d14ce66e0bd838739669a611427384ae042343119c4f837f5b5bd",
       "packages/vcs-diff/lib/run.ts": "adf80ce7ad5347c9440a8c32473c2c42a5f0c136ae75fe71248072658bbb6132",
-      "packages/vcs-diff/lib/ui.ts": "44478ab93c234bbd166579bad9059b9cb375e47a8cd8ff1c88d0c6fcfe22f6da",
+      "packages/vcs-diff/lib/ui.ts": "4a979f98f4b7799af12c8d2e1a580be21aefdc8a3179d36711c99d17b9efb000",
       "packages/vcs-diff/presets/git.js": "c0edfcb151067d193486ceaaadbd087f5df0c9e475492944a872377008f126c3",
       "packages/vcs-diff/presets/arc.js": "2e27ffa83e61962e7df0c5151c18337193185df6191675d29f198746dfdfcf09",
       "packages/vcs-diff/presets/patch.js": "29c7405200806167de76abc4e952e1f89ad6be5e9c63654706452cb13b498876",
       "packages/vcs-diff/scripts/build-package.mjs": "266ba50d85c11606c38025c669d18f9e770d5c0d46c3af19c558a0ba3e96f1b0",
-      "packages/vcs-diff/tests/smoke.py": "cc74807c7e93a2a7f8aa12493c4b56ec6e231bc3728a715ccabb87c347a2d089",
-      "packages/vcs-diff/tests/core.test.ts": "3776a7bb5d0716c64ad601f063530b82de2abaaaaf987bf18c470e74e9b03be8",
+      "packages/vcs-diff/tests/smoke.py": "0f0af19cf5419594679eeb5ca2725be7a78fcf0f71e719a3671ebe552c29568d",
+      "packages/vcs-diff/tests/core.test.ts": "e753cd33faa85667d9ea0bea530655f1b932e406c26ec041e6d5dff386c0cde0",
       "packages/vcs-diff/tests/package.test.mjs": "9923c9e6bbbfd33678b60fcd076e27bbf522f25a11904003ed5db626e67164ee",
-      "packages/_shared/runtime_brand.ts": "aa6dc87e71757b4d0fcf46b72b81ee22f9217120291852f4c993909051276091",
+      "packages/_shared/runtime_brand.ts": "fdbf3ddbfcc0cb297a15a6477e869d349b3f4cbdfd6e1bffff2bcec31e06223f",
       "packages/_shared/runtime_icons.ts": "9bfc27a45a577cc0f5375c987d53bf6570af8859e43dbff2cf700c6716746f45",
-      "packages/_shared/native_demo.py": "165a6aecb5879e1639a12f122f2f6de10137d1974a18b173a0d3a818e5f8f727"
+      "packages/_shared/native_demo.py": "cc715ae79d9a8991798c11c677bf64444c7fe155d148d9cabe7bca4b8bcffb29"
     },
-    "recording_sha256": "22b752e4ea50509199412d465fea33ef7c1a181e7b681c5dcf9136d06e2ac35b",
-    "ansi_sha256": "0ca498ee87e44dd21247200991fa2159ba6d7389fa8d6ff85f0ae8eed3de6ffb",
+    "recording_sha256": "c3c789b54400305441ec649d0ce151fce55634333c6ab5bfbd5e0d1e9b3cb28e",
+    "ansi_sha256": "8a9e92a61737663000d77e1749078a9b54522227deae258ac2c8e224486a34e5",
     "gif": {
-      "frames": 206,
+      "frames": 420,
       "dimensions": [
         990,
         598
       ],
-      "duration": 25.76,
-      "bytes": 1542937,
-      "sha256": "1b92c58378bbcff4cc1d8a9e715cd7583b7c503eb55e5acde57b606ddd247660",
+      "duration": 52.51,
+      "bytes": 1436849,
+      "sha256": "88140f46adaee253c97acb1b1a7e086b0d6625707ab3084de61bddd7da7f9d4b",
       "full_decode": "PASS"
     },
-    "gif_sha256": "1b92c58378bbcff4cc1d8a9e715cd7583b7c503eb55e5acde57b606ddd247660",
-    "mp4_sha256": "0ef6bac45c4b94379a57e883370752758eb9da31c1e1a567a3737a3f73faf116",
-    "frames": 206,
+    "gif_sha256": "88140f46adaee253c97acb1b1a7e086b0d6625707ab3084de61bddd7da7f9d4b",
+    "mp4_sha256": "cc1188a2982f76f157a32464d3bfe02354f8a98de4104e529e304a5235b0ed03",
+    "frames": 420,
     "fps": 8,
-    "duration": 25.75,
+    "duration": 52.5,
     "full_decode": "PASS",
     "fonts": [
       {
@@ -251,8 +440,8 @@
     },
     "ffmpeg_version": "ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2024 the FFmpeg developers",
     "recording_origin": {
-      "source_ansi_sha256": "fae9a1a5d13028e441ae63957e3c319b6c60518f941e0ec2c4d4b23388f7d31a",
-      "source_recording_sha256": "64efd8ce7085065c55939530d35fc399963129577e500966d3749f43388bcf06",
+      "source_ansi_sha256": "08f7815f24542b5bffbd53eb905ddc88a7c578d6a4d341196d9b3e19970307be",
+      "source_recording_sha256": "c2f2ef0e4bdd4c2533dea525e466332e45cac7d8b130d7a80ccf55bad4572c52",
       "start_phase": "adapter-picker",
       "end_phase": "dirty-blame-cleared"
     },
@@ -278,6 +467,7 @@
       "owner-return-cleanup",
       "staged",
       "light-theme",
+      "light-side",
       "resize",
       "commit-input",
       "commit-root",
@@ -290,8 +480,8 @@
       "dirty-blame-cleared"
     ],
     "native_bundle": {
-      "source_sha256": "07af446cc229b88077f4e8512a3bcc3dcefe8b0cd3275cdcacba3afeced6a6de",
-      "copy_sha256": "e2fddb977f912749491b5d0c5216ef1f0a4b9afe3b190858a442b99fcd036c4f",
+      "source_sha256": "fbb99fe0c1abef24fbbb3522adbdb41072492825d542d460000e4f50ad7c422e",
+      "copy_sha256": "fc8d7b711f6d53b450e5f8a1972545e9ddca6755e1d7abe81a3df39e853ad2b1",
       "instrumented": true
     },
     "binary_sha256": "2b8f7413e80e7746d67261780fbbe698ffcfe5f15f652c74fc6ec0115b811e05",
@@ -302,35 +492,98 @@
     "source_markers": "Static only; no VCS mouse handler or preview. Normal native folding asserted."
   },
   "states": {
+    "timing": {
+      "recording_duration": 12.6813994020049,
+      "source_clips": [
+        {
+          "start": 0,
+          "end": 12.6813994020049
+        }
+      ],
+      "sampled_frames": 103,
+      "presentation_duration": 21.875,
+      "hold_seconds": 1.5,
+      "holds": [
+        {
+          "phase": "history-stop",
+          "recording_time": 1.5194127389986534,
+          "event_count": 37,
+          "presentation_start": 1.625,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "tree-viewer-loading",
+          "recording_time": 4.405467741016764,
+          "event_count": 148,
+          "presentation_start": 6.0,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "cancel-ui-cleanup",
+          "recording_time": 6.401515244011534,
+          "event_count": 199,
+          "presentation_start": 9.5,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "empty",
+          "recording_time": 9.440325400006259,
+          "event_count": 335,
+          "presentation_start": 14.0,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "parser-error",
+          "recording_time": 11.474998290010262,
+          "event_count": 430,
+          "presentation_start": 17.5,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "config-reloaded",
+          "recording_time": 12.6813994020049,
+          "event_count": 464,
+          "presentation_start": 20.25,
+          "frames": 12,
+          "seconds": 1.5
+        }
+      ],
+      "policy": "Exact semantic phase freezes; PTY timestamps unchanged. Holds are presentation only."
+    },
     "caption": "Actual Fresh PTY; temporary real Git fixture. Delayed/error/empty adapters are synthetic JS-expression fixtures, NOT live Arc.",
     "assertions": {
       "history-loading": {
-        "timer": 536,
+        "timer": 507,
         "phase": 1,
         "cursor": null
       },
       "history-loading-next": {
-        "timer": 536,
+        "timer": 507,
         "phase": 5,
         "cursor": null
       },
       "history-stop": {
         "timer": null,
-        "phase": 6,
+        "phase": 5,
         "cursor": null
       },
       "history-idle-stop": {
         "timer": null,
-        "phase": 6,
+        "phase": 5,
         "cursor": null
       },
       "tree-viewer-loading": {
-        "timer": 573,
+        "timer": 544,
         "phase": 1,
         "cursor": null
       },
       "tree-viewer-loading-next": {
-        "timer": 573,
+        "timer": 544,
         "phase": 5,
         "cursor": null
       },
@@ -356,40 +609,40 @@
       }
     },
     "source_hashes": {
-      "packages/vcs-diff/vcs_diff.ts": "12f25479df32a7895a07512ecf8fab089003021c3b6932ad61f6d214d7a927ce",
+      "packages/vcs-diff/vcs_diff.ts": "15b0abb35194cc1080231235ea1ca6146c465fff74b7e57b377cd93aed6a8c8f",
       "packages/vcs-diff/lib/config.ts": "8bc9ad9c4008aaa03dd1e00f1bf270c36b9931d704eaf9cb9a24da44eacf3b56",
       "packages/vcs-diff/lib/model.ts": "22b88905936d14ce66e0bd838739669a611427384ae042343119c4f837f5b5bd",
       "packages/vcs-diff/lib/run.ts": "adf80ce7ad5347c9440a8c32473c2c42a5f0c136ae75fe71248072658bbb6132",
-      "packages/vcs-diff/lib/ui.ts": "44478ab93c234bbd166579bad9059b9cb375e47a8cd8ff1c88d0c6fcfe22f6da",
+      "packages/vcs-diff/lib/ui.ts": "4a979f98f4b7799af12c8d2e1a580be21aefdc8a3179d36711c99d17b9efb000",
       "packages/vcs-diff/presets/git.js": "c0edfcb151067d193486ceaaadbd087f5df0c9e475492944a872377008f126c3",
       "packages/vcs-diff/presets/arc.js": "2e27ffa83e61962e7df0c5151c18337193185df6191675d29f198746dfdfcf09",
       "packages/vcs-diff/presets/patch.js": "29c7405200806167de76abc4e952e1f89ad6be5e9c63654706452cb13b498876",
       "packages/vcs-diff/scripts/build-package.mjs": "266ba50d85c11606c38025c669d18f9e770d5c0d46c3af19c558a0ba3e96f1b0",
-      "packages/vcs-diff/tests/smoke.py": "cc74807c7e93a2a7f8aa12493c4b56ec6e231bc3728a715ccabb87c347a2d089",
-      "packages/vcs-diff/tests/core.test.ts": "3776a7bb5d0716c64ad601f063530b82de2abaaaaf987bf18c470e74e9b03be8",
+      "packages/vcs-diff/tests/smoke.py": "0f0af19cf5419594679eeb5ca2725be7a78fcf0f71e719a3671ebe552c29568d",
+      "packages/vcs-diff/tests/core.test.ts": "e753cd33faa85667d9ea0bea530655f1b932e406c26ec041e6d5dff386c0cde0",
       "packages/vcs-diff/tests/package.test.mjs": "9923c9e6bbbfd33678b60fcd076e27bbf522f25a11904003ed5db626e67164ee",
-      "packages/_shared/runtime_brand.ts": "aa6dc87e71757b4d0fcf46b72b81ee22f9217120291852f4c993909051276091",
+      "packages/_shared/runtime_brand.ts": "fdbf3ddbfcc0cb297a15a6477e869d349b3f4cbdfd6e1bffff2bcec31e06223f",
       "packages/_shared/runtime_icons.ts": "9bfc27a45a577cc0f5375c987d53bf6570af8859e43dbff2cf700c6716746f45",
-      "packages/_shared/native_demo.py": "165a6aecb5879e1639a12f122f2f6de10137d1974a18b173a0d3a818e5f8f727"
+      "packages/_shared/native_demo.py": "cc715ae79d9a8991798c11c677bf64444c7fe155d148d9cabe7bca4b8bcffb29"
     },
-    "recording_sha256": "7bd1c07ae400a8d643bf57261860540a4911a971a5bd54e6448f689e6076e707",
-    "ansi_sha256": "153175f4231e1daf4e3d7c3157fa664ce6ab35fc32a6b218ca1b4d8f156c0ba9",
+    "recording_sha256": "3cbb52dedbcdec32499ae80c4da4694be64240b4cb540a7df243daf33d6fb22b",
+    "ansi_sha256": "f64497c2ce499fbcfb70468e310003aed9da95181f16dea68c159e97fb9a21db",
     "gif": {
-      "frames": 103,
+      "frames": 175,
       "dimensions": [
         990,
         598
       ],
-      "duration": 12.88,
-      "bytes": 430939,
-      "sha256": "2c60f63741cae5390cd0ba8d09dec128748ccb20b9387df5642b4a9ac4c9bee3",
+      "duration": 21.88,
+      "bytes": 448232,
+      "sha256": "6f51debcc40c8bff3cf3344dc250d935df83fa59f82f051edb04551e05b249ce",
       "full_decode": "PASS"
     },
-    "gif_sha256": "2c60f63741cae5390cd0ba8d09dec128748ccb20b9387df5642b4a9ac4c9bee3",
-    "mp4_sha256": "e492086c1bb3d915f98197a70b085ad7a012378626cb2669bce7442ed7526ae8",
-    "frames": 103,
+    "gif_sha256": "6f51debcc40c8bff3cf3344dc250d935df83fa59f82f051edb04551e05b249ce",
+    "mp4_sha256": "905c23df018a80f0c2ea94c242b0b51b86e89188a700d0db39ae47c80220f836",
+    "frames": 175,
     "fps": 8,
-    "duration": 12.875,
+    "duration": 21.875,
     "full_decode": "PASS",
     "fonts": [
       {
@@ -413,8 +666,8 @@
     },
     "ffmpeg_version": "ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2024 the FFmpeg developers",
     "recording_origin": {
-      "source_ansi_sha256": "fae9a1a5d13028e441ae63957e3c319b6c60518f941e0ec2c4d4b23388f7d31a",
-      "source_recording_sha256": "64efd8ce7085065c55939530d35fc399963129577e500966d3749f43388bcf06",
+      "source_ansi_sha256": "08f7815f24542b5bffbd53eb905ddc88a7c578d6a4d341196d9b3e19970307be",
+      "source_recording_sha256": "c2f2ef0e4bdd4c2533dea525e466332e45cac7d8b130d7a80ccf55bad4572c52",
       "start_phase": "history-loading",
       "end_phase": "config-reloaded"
     },
@@ -431,8 +684,8 @@
       "config-reloaded"
     ],
     "native_bundle": {
-      "source_sha256": "07af446cc229b88077f4e8512a3bcc3dcefe8b0cd3275cdcacba3afeced6a6de",
-      "copy_sha256": "e2fddb977f912749491b5d0c5216ef1f0a4b9afe3b190858a442b99fcd036c4f",
+      "source_sha256": "fbb99fe0c1abef24fbbb3522adbdb41072492825d542d460000e4f50ad7c422e",
+      "copy_sha256": "fc8d7b711f6d53b450e5f8a1972545e9ddca6755e1d7abe81a3df39e853ad2b1",
       "instrumented": true
     },
     "binary_sha256": "2b8f7413e80e7746d67261780fbbe698ffcfe5f15f652c74fc6ec0115b811e05",
@@ -443,6 +696,45 @@
     "source_markers": "Static only; no VCS mouse handler or preview. Normal native folding asserted."
   },
   "limits": {
+    "timing": {
+      "recording_duration": 21.50328111401177,
+      "source_clips": [
+        {
+          "start": 0,
+          "end": 21.50328111401177
+        }
+      ],
+      "sampled_frames": 174,
+      "presentation_duration": 26.25,
+      "hold_seconds": 1.5,
+      "holds": [
+        {
+          "phase": "timeout-ui-stop",
+          "recording_time": 16.139119607018074,
+          "event_count": 622,
+          "presentation_start": 16.25,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "bounded-child-exit",
+          "recording_time": 18.717328794009518,
+          "event_count": 707,
+          "presentation_start": 20.25,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "timeout-reopen-success",
+          "recording_time": 21.50328111401177,
+          "event_count": 824,
+          "presentation_start": 24.625,
+          "frames": 12,
+          "seconds": 1.5
+        }
+      ],
+      "policy": "Exact semantic phase freezes; PTY timestamps unchanged. Holds are presentation only."
+    },
     "caption": "Actual Fresh PTY; temporary real Git fixture. Delayed/error/empty adapters are synthetic JS-expression fixtures, NOT live Arc.",
     "assertions": {
       "limits-start": {
@@ -451,13 +743,13 @@
         "cursor": null
       },
       "timeout-loading": {
-        "timer": 682,
+        "timer": 642,
         "phase": 1,
         "cursor": null
       },
       "timeout-ui-stop": {
         "timer": null,
-        "phase": 66,
+        "phase": 67,
         "cursor": null
       },
       "bounded-child-exit": {
@@ -467,45 +759,49 @@
       },
       "timeout-reopen-success": {
         "timer": null,
-        "phase": 7,
-        "cursor": null
+        "phase": 6,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": null
+        }
       }
     },
     "source_hashes": {
-      "packages/vcs-diff/vcs_diff.ts": "12f25479df32a7895a07512ecf8fab089003021c3b6932ad61f6d214d7a927ce",
+      "packages/vcs-diff/vcs_diff.ts": "15b0abb35194cc1080231235ea1ca6146c465fff74b7e57b377cd93aed6a8c8f",
       "packages/vcs-diff/lib/config.ts": "8bc9ad9c4008aaa03dd1e00f1bf270c36b9931d704eaf9cb9a24da44eacf3b56",
       "packages/vcs-diff/lib/model.ts": "22b88905936d14ce66e0bd838739669a611427384ae042343119c4f837f5b5bd",
       "packages/vcs-diff/lib/run.ts": "adf80ce7ad5347c9440a8c32473c2c42a5f0c136ae75fe71248072658bbb6132",
-      "packages/vcs-diff/lib/ui.ts": "44478ab93c234bbd166579bad9059b9cb375e47a8cd8ff1c88d0c6fcfe22f6da",
+      "packages/vcs-diff/lib/ui.ts": "4a979f98f4b7799af12c8d2e1a580be21aefdc8a3179d36711c99d17b9efb000",
       "packages/vcs-diff/presets/git.js": "c0edfcb151067d193486ceaaadbd087f5df0c9e475492944a872377008f126c3",
       "packages/vcs-diff/presets/arc.js": "2e27ffa83e61962e7df0c5151c18337193185df6191675d29f198746dfdfcf09",
       "packages/vcs-diff/presets/patch.js": "29c7405200806167de76abc4e952e1f89ad6be5e9c63654706452cb13b498876",
       "packages/vcs-diff/scripts/build-package.mjs": "266ba50d85c11606c38025c669d18f9e770d5c0d46c3af19c558a0ba3e96f1b0",
-      "packages/vcs-diff/tests/smoke.py": "cc74807c7e93a2a7f8aa12493c4b56ec6e231bc3728a715ccabb87c347a2d089",
-      "packages/vcs-diff/tests/core.test.ts": "3776a7bb5d0716c64ad601f063530b82de2abaaaaf987bf18c470e74e9b03be8",
+      "packages/vcs-diff/tests/smoke.py": "0f0af19cf5419594679eeb5ca2725be7a78fcf0f71e719a3671ebe552c29568d",
+      "packages/vcs-diff/tests/core.test.ts": "e753cd33faa85667d9ea0bea530655f1b932e406c26ec041e6d5dff386c0cde0",
       "packages/vcs-diff/tests/package.test.mjs": "9923c9e6bbbfd33678b60fcd076e27bbf522f25a11904003ed5db626e67164ee",
-      "packages/_shared/runtime_brand.ts": "aa6dc87e71757b4d0fcf46b72b81ee22f9217120291852f4c993909051276091",
+      "packages/_shared/runtime_brand.ts": "fdbf3ddbfcc0cb297a15a6477e869d349b3f4cbdfd6e1bffff2bcec31e06223f",
       "packages/_shared/runtime_icons.ts": "9bfc27a45a577cc0f5375c987d53bf6570af8859e43dbff2cf700c6716746f45",
-      "packages/_shared/native_demo.py": "165a6aecb5879e1639a12f122f2f6de10137d1974a18b173a0d3a818e5f8f727"
+      "packages/_shared/native_demo.py": "cc715ae79d9a8991798c11c677bf64444c7fe155d148d9cabe7bca4b8bcffb29"
     },
-    "recording_sha256": "1e72ba75bc1c4be2f08f459d4a47c1476298bfd74fbbeb5c89410b39bb8466ef",
-    "ansi_sha256": "a46fa489b8c3d362e30829701d4ce40eb1e1a80c588ffcc2eba994cee5e5367c",
+    "recording_sha256": "0e4f60ca8522284769e6de55d9aec20a1b4334598e4d02b290c5fec7672e77ec",
+    "ansi_sha256": "f2c9c29b90535cb3213db74bf796597a7daf973644c840b82681f096b0d4d753",
     "gif": {
-      "frames": 174,
+      "frames": 210,
       "dimensions": [
         990,
         598
       ],
-      "duration": 21.76,
-      "bytes": 242760,
-      "sha256": "b0f6ee4ff0743bf1482491ed204eaf25dd43641383fafd2e46a4da19aab11957",
+      "duration": 26.26,
+      "bytes": 266276,
+      "sha256": "7b8cd4a5d63a8539c0cfcf592f52865ae735ada681772047cf54040ae7729b9d",
       "full_decode": "PASS"
     },
-    "gif_sha256": "b0f6ee4ff0743bf1482491ed204eaf25dd43641383fafd2e46a4da19aab11957",
-    "mp4_sha256": "70dad16041ca24aba1c46dd7f9cc7b4fe53fdc29494b85978dae9dd27e2a19b5",
-    "frames": 174,
+    "gif_sha256": "7b8cd4a5d63a8539c0cfcf592f52865ae735ada681772047cf54040ae7729b9d",
+    "mp4_sha256": "eb13bacc117e5db455cbce1f0354e32b3a8eff735b75a7b203f1a4f9fb83e5a5",
+    "frames": 210,
     "fps": 8,
-    "duration": 21.75,
+    "duration": 26.25,
     "full_decode": "PASS",
     "fonts": [
       {
@@ -529,8 +825,8 @@
     },
     "ffmpeg_version": "ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2024 the FFmpeg developers",
     "recording_origin": {
-      "source_ansi_sha256": "fae9a1a5d13028e441ae63957e3c319b6c60518f941e0ec2c4d4b23388f7d31a",
-      "source_recording_sha256": "64efd8ce7085065c55939530d35fc399963129577e500966d3749f43388bcf06",
+      "source_ansi_sha256": "08f7815f24542b5bffbd53eb905ddc88a7c578d6a4d341196d9b3e19970307be",
+      "source_recording_sha256": "c2f2ef0e4bdd4c2533dea525e466332e45cac7d8b130d7a80ccf55bad4572c52",
       "start_phase": "limits-start",
       "end_phase": "timeout-reopen-success"
     },
@@ -542,8 +838,8 @@
       "timeout-reopen-success"
     ],
     "native_bundle": {
-      "source_sha256": "07af446cc229b88077f4e8512a3bcc3dcefe8b0cd3275cdcacba3afeced6a6de",
-      "copy_sha256": "e2fddb977f912749491b5d0c5216ef1f0a4b9afe3b190858a442b99fcd036c4f",
+      "source_sha256": "fbb99fe0c1abef24fbbb3522adbdb41072492825d542d460000e4f50ad7c422e",
+      "copy_sha256": "fc8d7b711f6d53b450e5f8a1972545e9ddca6755e1d7abe81a3df39e853ad2b1",
       "instrumented": true
     },
     "binary_sha256": "2b8f7413e80e7746d67261780fbbe698ffcfe5f15f652c74fc6ec0115b811e05",
@@ -554,6 +850,69 @@
     "source_markers": "Static only; no VCS mouse handler or preview. Normal native folding asserted."
   },
   "cancel": {
+    "timing": {
+      "recording_duration": 27.810413848987082,
+      "source_clips": [
+        {
+          "start": 0,
+          "end": 27.810413848987082
+        }
+      ],
+      "sampled_frames": 224,
+      "presentation_duration": 37.0,
+      "hold_seconds": 1.5,
+      "holds": [
+        {
+          "phase": "escape-immediate",
+          "recording_time": 0.0,
+          "event_count": 3,
+          "presentation_start": 0.0,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "bounded-busy-lock",
+          "recording_time": 1.5159623280051164,
+          "event_count": 62,
+          "presentation_start": 3.125,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "cancel-reopen-success",
+          "recording_time": 21.1799063369981,
+          "event_count": 867,
+          "presentation_start": 24.25,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "output-quota-ui-stop",
+          "recording_time": 22.983610516006593,
+          "event_count": 943,
+          "presentation_start": 27.5,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "content-error",
+          "recording_time": 26.231388093990972,
+          "event_count": 1075,
+          "presentation_start": 32.25,
+          "frames": 12,
+          "seconds": 1.5
+        },
+        {
+          "phase": "syntax-error",
+          "recording_time": 27.810413848987082,
+          "event_count": 1114,
+          "presentation_start": 35.375,
+          "frames": 12,
+          "seconds": 1.5
+        }
+      ],
+      "policy": "Exact semantic phase freezes; PTY timestamps unchanged. Holds are presentation only."
+    },
     "caption": "Actual Fresh PTY; temporary real Git fixture. Delayed/error/empty adapters are synthetic JS-expression fixtures, NOT live Arc.",
     "assertions": {
       "escape-immediate": {
@@ -568,8 +927,12 @@
       },
       "cancel-reopen-success": {
         "timer": null,
-        "phase": 7,
-        "cursor": null
+        "phase": 6,
+        "cursor": {
+          "file": "0:mixed.txt",
+          "side": 1,
+          "line": null
+        }
       },
       "output-quota-ui-stop": {
         "timer": null,
@@ -588,40 +951,40 @@
       }
     },
     "source_hashes": {
-      "packages/vcs-diff/vcs_diff.ts": "12f25479df32a7895a07512ecf8fab089003021c3b6932ad61f6d214d7a927ce",
+      "packages/vcs-diff/vcs_diff.ts": "15b0abb35194cc1080231235ea1ca6146c465fff74b7e57b377cd93aed6a8c8f",
       "packages/vcs-diff/lib/config.ts": "8bc9ad9c4008aaa03dd1e00f1bf270c36b9931d704eaf9cb9a24da44eacf3b56",
       "packages/vcs-diff/lib/model.ts": "22b88905936d14ce66e0bd838739669a611427384ae042343119c4f837f5b5bd",
       "packages/vcs-diff/lib/run.ts": "adf80ce7ad5347c9440a8c32473c2c42a5f0c136ae75fe71248072658bbb6132",
-      "packages/vcs-diff/lib/ui.ts": "44478ab93c234bbd166579bad9059b9cb375e47a8cd8ff1c88d0c6fcfe22f6da",
+      "packages/vcs-diff/lib/ui.ts": "4a979f98f4b7799af12c8d2e1a580be21aefdc8a3179d36711c99d17b9efb000",
       "packages/vcs-diff/presets/git.js": "c0edfcb151067d193486ceaaadbd087f5df0c9e475492944a872377008f126c3",
       "packages/vcs-diff/presets/arc.js": "2e27ffa83e61962e7df0c5151c18337193185df6191675d29f198746dfdfcf09",
       "packages/vcs-diff/presets/patch.js": "29c7405200806167de76abc4e952e1f89ad6be5e9c63654706452cb13b498876",
       "packages/vcs-diff/scripts/build-package.mjs": "266ba50d85c11606c38025c669d18f9e770d5c0d46c3af19c558a0ba3e96f1b0",
-      "packages/vcs-diff/tests/smoke.py": "cc74807c7e93a2a7f8aa12493c4b56ec6e231bc3728a715ccabb87c347a2d089",
-      "packages/vcs-diff/tests/core.test.ts": "3776a7bb5d0716c64ad601f063530b82de2abaaaaf987bf18c470e74e9b03be8",
+      "packages/vcs-diff/tests/smoke.py": "0f0af19cf5419594679eeb5ca2725be7a78fcf0f71e719a3671ebe552c29568d",
+      "packages/vcs-diff/tests/core.test.ts": "e753cd33faa85667d9ea0bea530655f1b932e406c26ec041e6d5dff386c0cde0",
       "packages/vcs-diff/tests/package.test.mjs": "9923c9e6bbbfd33678b60fcd076e27bbf522f25a11904003ed5db626e67164ee",
-      "packages/_shared/runtime_brand.ts": "aa6dc87e71757b4d0fcf46b72b81ee22f9217120291852f4c993909051276091",
+      "packages/_shared/runtime_brand.ts": "fdbf3ddbfcc0cb297a15a6477e869d349b3f4cbdfd6e1bffff2bcec31e06223f",
       "packages/_shared/runtime_icons.ts": "9bfc27a45a577cc0f5375c987d53bf6570af8859e43dbff2cf700c6716746f45",
-      "packages/_shared/native_demo.py": "165a6aecb5879e1639a12f122f2f6de10137d1974a18b173a0d3a818e5f8f727"
+      "packages/_shared/native_demo.py": "cc715ae79d9a8991798c11c677bf64444c7fe155d148d9cabe7bca4b8bcffb29"
     },
-    "recording_sha256": "4d88a3063953fc1f49eec09846e8d110be20a319f93055cb201b46bb64475109",
-    "ansi_sha256": "fae9a1a5d13028e441ae63957e3c319b6c60518f941e0ec2c4d4b23388f7d31a",
+    "recording_sha256": "2dc75c7d335f9db33c37c4861cc6fe92a3df4f9c6a02bd1cd7cad8f4b42d1877",
+    "ansi_sha256": "b1cd04ce567d7acf46cdca97bd61dddbedea2bc0425f3340c5a71b2dbcf63513",
     "gif": {
-      "frames": 223,
+      "frames": 296,
       "dimensions": [
         990,
         598
       ],
-      "duration": 27.88,
-      "bytes": 502873,
-      "sha256": "4793b7228b724f6f7b1cc2c70fa45700bddc8d6f43e85d94891ccbee8c6fbc59",
+      "duration": 37.01,
+      "bytes": 526979,
+      "sha256": "fea7fac10c094bd8a85e11c2d4a431805506be71d583617dcc777925c22f16a8",
       "full_decode": "PASS"
     },
-    "gif_sha256": "4793b7228b724f6f7b1cc2c70fa45700bddc8d6f43e85d94891ccbee8c6fbc59",
-    "mp4_sha256": "483ecf98b4eb486c56e2ad362eab895c328aaf40e5d185905a644febeb775982",
-    "frames": 223,
+    "gif_sha256": "fea7fac10c094bd8a85e11c2d4a431805506be71d583617dcc777925c22f16a8",
+    "mp4_sha256": "6b5af25513beaacda8bb380b2d210101badc669622c47f636b4257f3686d46e5",
+    "frames": 296,
     "fps": 8,
-    "duration": 27.875,
+    "duration": 37.0,
     "full_decode": "PASS",
     "fonts": [
       {
@@ -645,8 +1008,8 @@
     },
     "ffmpeg_version": "ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2024 the FFmpeg developers",
     "recording_origin": {
-      "source_ansi_sha256": "fae9a1a5d13028e441ae63957e3c319b6c60518f941e0ec2c4d4b23388f7d31a",
-      "source_recording_sha256": "64efd8ce7085065c55939530d35fc399963129577e500966d3749f43388bcf06",
+      "source_ansi_sha256": "08f7815f24542b5bffbd53eb905ddc88a7c578d6a4d341196d9b3e19970307be",
+      "source_recording_sha256": "c2f2ef0e4bdd4c2533dea525e466332e45cac7d8b130d7a80ccf55bad4572c52",
       "start_phase": "escape-immediate",
       "end_phase": "syntax-error"
     },
@@ -659,8 +1022,8 @@
       "syntax-error"
     ],
     "native_bundle": {
-      "source_sha256": "07af446cc229b88077f4e8512a3bcc3dcefe8b0cd3275cdcacba3afeced6a6de",
-      "copy_sha256": "e2fddb977f912749491b5d0c5216ef1f0a4b9afe3b190858a442b99fcd036c4f",
+      "source_sha256": "fbb99fe0c1abef24fbbb3522adbdb41072492825d542d460000e4f50ad7c422e",
+      "copy_sha256": "fc8d7b711f6d53b450e5f8a1972545e9ddca6755e1d7abe81a3df39e853ad2b1",
       "instrumented": true
     },
     "binary_sha256": "2b8f7413e80e7746d67261780fbbe698ffcfe5f15f652c74fc6ec0115b811e05",
